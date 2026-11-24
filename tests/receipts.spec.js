@@ -134,3 +134,23 @@ test('renders without JavaScript errors and keeps readable text sizes', async ({
   expect(tiny).toBe(0);
   expect(errors).toEqual([]);
 });
+
+test('layout toggle shows the phone layout on a desktop screen and remembers it', async ({ page }) => {
+  const toggle = page.getByRole('button', { name: 'มุมมองมือถือ' });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  expect((await page.locator('.frame').boundingBox()).width).toBeGreaterThan(1000);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  expect((await page.locator('.frame').boundingBox()).width).toBeLessThanOrEqual(420);
+  await expect(page.locator('.detail-pane')).toBeHidden();
+  await page.getByRole('button', { name: /วิภา/ }).click();
+  await expect(page.getByLabel('เบอร์โทร')).toBeVisible();
+  await expect(page.locator('.list-pane')).toBeHidden();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'มุมมองมือถือ' })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'มุมมองมือถือ' }).click();
+  await expect(page.locator('.detail-pane')).toBeVisible();
+  await expect(page.locator('.list-pane')).toBeVisible();
+  expect((await page.locator('.frame').boundingBox()).width).toBeGreaterThan(1000);
+});

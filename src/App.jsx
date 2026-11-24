@@ -1,10 +1,12 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, Maximize2, MessageCircle, Plus, Search, Send, TriangleAlert, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, Maximize2, MessageCircle, Monitor, Plus, Search, Send, Smartphone, TriangleAlert, Trash2, X } from 'lucide-react';
 import { STORAGE_KEY, branches, statusLabels, seeds, original, money, monthNames, thaiDate, ocrRawText, restore } from './data.js';
 import { validate, warnings, fieldOrder } from './validation.js';
 import { formImage } from './formImage.js';
 
 const emptyItem = () => ({ product: '', size: '', color: '' });
+const LAYOUT_KEY = 'receipt-desk-layout-v1';
+const readPhone = () => { try { return localStorage.getItem(LAYOUT_KEY) === 'phone'; } catch { return false; } };
 
 function TextField({ label, value, onChange, locked, error, unsure, className = '', hint, ...rest }) {
   const id = useId();
@@ -65,6 +67,7 @@ export default function App() {
   const [saveError, setSaveError] = useState(false);
   const [newId, setNewId] = useState(null);
   const [mobileView, setMobileView] = useState('list');
+  const [phone, setPhone] = useState(readPhone);
   const dialogRef = useRef(null);
   const lastFocus = useRef(null);
   const formRef = useRef(null);
@@ -93,6 +96,12 @@ export default function App() {
 
   function update(id, key, value) {
     setReceipts(rs => rs.map(r => r.id === id && r.status !== 'queued' ? { ...r, [key]: value } : r));
+  }
+  function toggleLayout() {
+    const next = !phone;
+    setPhone(next);
+    setMobileView('list');
+    try { localStorage.setItem(LAYOUT_KEY, next ? 'phone' : 'desktop'); } catch { /* ใช้ได้ต่อโดยไม่จำค่า */ }
   }
   function select(id) { setSelectedId(id); setMobileView('detail'); }
   function focusFirstError(errs) {
@@ -151,7 +160,8 @@ export default function App() {
 
   const tabs = [{ key: 'todo', label: 'รอตรวจ', count: todoCount }, { key: 'queued', label: 'ส่งต่อแล้ว', count: queuedCount }, { key: 'all', label: 'ทั้งหมด', count: receipts.length }];
 
-  return <div className={`app view-${mobileView}`}>
+  return <div className={`app view-${mobileView}${phone ? ' phone-mode' : ''}`}>
+    <div className="frame">
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark" aria-hidden="true"><FileText size={22} /></span>
@@ -159,8 +169,9 @@ export default function App() {
       </div>
       <div className="top-actions">
         <span className="chip">ข้อมูลตัวอย่าง</span>
+        <button className="btn ghost layout-toggle" aria-label="มุมมองมือถือ" aria-pressed={phone} onClick={toggleLayout} title={phone ? 'กดเพื่อกลับเป็นแบบเดสก์ท็อป' : 'กดเพื่อดูแบบมือถือ'}>{phone ? <Monitor size={18} aria-hidden="true" /> : <Smartphone size={18} aria-hidden="true" />}<span className="lbl">{phone ? 'เดสก์ท็อป' : 'มือถือ'}</span></button>
         <button className="btn ghost" onClick={() => setDialog({ type: 'help' })}><CircleHelp size={18} aria-hidden="true" />วิธีใช้</button>
-        <button className="btn primary" onClick={simulate}><Plus size={18} aria-hidden="true" />จำลองใบสั่งซื้อใหม่</button>
+        <button className="btn primary" aria-label="จำลองใบสั่งซื้อใหม่" onClick={simulate}><Plus size={18} aria-hidden="true" /><span className="lbl-long">จำลองใบสั่งซื้อใหม่</span><span className="lbl-short">จำลองใหม่</span></button>
       </div>
     </header>
 
@@ -276,6 +287,7 @@ export default function App() {
           </div>
         </>}
       </section>
+    </div>
     </div>
 
     {toast && <div className="toast" role="status"><Check size={18} aria-hidden="true" />{toast}<button aria-label="ปิดข้อความ" onClick={() => setToast('')}><X size={16} /></button></div>}

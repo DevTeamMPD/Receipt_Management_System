@@ -33,6 +33,14 @@ button:disabled { cursor: not-allowed; }
 svg { flex-shrink: 0; vertical-align: middle; }
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 
+/* กรอบแอป: กฎมือถือใช้ความกว้างของกรอบ (container) จึงสลับเป็นมุมมองมือถือบนจอใหญ่ได้ */
+.frame { container: frame / inline-size; background: var(--bg); }
+.layout-toggle[aria-pressed='true'] { background: var(--primary-soft); color: var(--primary-dark); }
+.lbl-short { display: none; }
+.phone-mode { background: #d5dce7; min-height: 100vh; padding: 16px 0; }
+.phone-mode .frame { max-width: 420px; margin: 0 auto; border: 1px solid #aab6c6; border-radius: 28px; overflow: clip; box-shadow: 0 20px 60px rgba(15, 25, 40, .25); }
+@media (max-width: 960px) { .layout-toggle { display: none; } .phone-mode { padding: 0; } .phone-mode .frame { max-width: none; border: 0; border-radius: 0; box-shadow: none; } }
+
 /* ปุ่ม */
 .btn { min-height: 44px; padding: 0 18px; border-radius: 10px; font-weight: 500; white-space: nowrap; }
 .btn.primary { background: var(--primary); color: #fff; }
@@ -175,7 +183,7 @@ legend { font-weight: 600; font-size: 17px; padding: 0 8px; color: var(--primary
 .help-list { padding-left: 22px; line-height: 2; margin: 8px 0; }
 
 /* หน้าจอแคบ: แสดงทีละส่วน (รายการ → รายละเอียด) */
-@media (max-width: 960px) {
+@container frame (max-width: 960px) {
   .workspace { grid-template-columns: minmax(0, 1fr); height: auto; min-height: calc(100vh - 68px); }
   .list-pane, .detail-pane { height: auto; }
   .view-list .detail-pane { display: none; }
@@ -195,15 +203,18 @@ legend { font-weight: 600; font-size: 17px; padding: 0 8px; color: var(--primary
   .brand span:not(.brand-mark) { display: none; }
   .chip { display: none; }
 }
-@media (max-width: 600px) {
+@container frame (max-width: 600px) {
   .grid2 { grid-template-columns: minmax(0, 1fr); }
   .item-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px; }
   .item-row input:first-child { grid-column: 1 / -1; }
   .item-row .icon-btn { grid-column: 3; grid-row: 2; }
   .action-bar { flex-direction: column; align-items: stretch; }
   .action-bar .btn { width: 100%; }
-  .top-actions .btn.ghost { display: none; }
+  .top-actions .btn.ghost:not(.layout-toggle) { display: none; }
   .top-actions .btn { padding: 0 12px; font-size: 15px; }
+  .layout-toggle .lbl { display: none; }
+  .lbl-long { display: none; }
+  .lbl-short { display: inline; }
   .toast { bottom: 120px; }
   .ab-note { display: none; }
   .photo { max-height: 300px; display: flex; justify-content: center; }

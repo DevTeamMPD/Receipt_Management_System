@@ -32,6 +32,7 @@ npm run preview
 - ยืนยันก่อนเข้าคิวจำลอง ล็อกใบที่เข้าคิวแล้ว และเปิดใบถัดไปให้อัตโนมัติ
 - ซูมรูป ดูข้อความ OCR ต้นฉบับ (ไม่เปลี่ยนตามที่แก้) จำลองใบใหม่โดยไม่ทับข้อมูลที่กำลังแก้
 - โทนน้ำเงินเทา ตัวอักษรอย่างน้อย 14px ความต่างสีผ่าน WCAG AA และมือถือแสดงทีละส่วน (รายการ → รายละเอียด)
+- ปุ่ม "มุมมองมือถือ" ที่หัวหน้าจอ: บนจอใหญ่จะแสดงเป็นเลเอาต์มือถือ (กรอบกว้างแบบโทรศัพท์) กดอีกครั้งเพื่อกลับ และจำค่าไว้ในเบราว์เซอร์
 
 ## Demo boundaries
 
@@ -48,7 +49,7 @@ npm test
 
 If Chromium is already installed, use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm test` instead of downloading a browser.
 
-Tests cover auto-save, filtering, incoming-row preservation, validation messages and focus, amount-mismatch warning, JST confirmation/locking/next-order flow, item editing, Thai date input, original OCR preservation, mobile list/detail navigation and minimum text size.
+Tests cover auto-save, filtering, incoming-row preservation, validation messages and focus, amount-mismatch warning, JST confirmation/locking/next-order flow, item editing, Thai date input, original OCR preservation, mobile list/detail navigation, the phone-layout toggle and minimum text size.
 
 ## Next integration steps
 
