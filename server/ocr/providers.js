@@ -34,11 +34,34 @@ export async function mockProvider({ base64 }) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// งบเวลา: Vercel ตัดฟังก์ชันที่ 60 วินาที จึงต้องเลิกรอโมเดลก่อนถึงตอนนั้น แล้วเก็บรูปไว้ให้คนกรอกเอง
+// OCR_TIMEOUT_MS = รอต่อหนึ่งคำขอ (ค่าเริ่มต้น 20 วิ), OCR_BUDGET_MS = รวมทุกคำขอ/ทุกรุ่น (ค่าเริ่มต้น 40 วิ)
+const slowMessage = provider => `${provider} ตอบช้าเกินไป เก็บรูปไว้แล้ว กรอกข้อมูลจากรูปเอง หรือลองใหม่ภายหลัง`;
+function budget(env) {
+  const perCall = Number(env.OCR_TIMEOUT_MS ?? 20_000);
+  const deadline = Date.now() + Number(env.OCR_BUDGET_MS ?? 40_000);
+  return {
+    signal(provider) {
+      const left = deadline - Date.now();
+      if (left < 1000) throw new OcrError(slowMessage(provider), 504);
+      return AbortSignal.timeout(Math.min(perCall, left));
+    },
+    hasTimeFor(ms) { return deadline - Date.now() > ms + 1000; },
+  };
+}
+async function fetchWithin(fetchImpl, provider, b, url, init) {
+  try { return await fetchImpl(url, { ...init, signal: b.signal(provider) }); } catch (e) {
+    if (e instanceof OcrError) throw e;
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw new OcrError(slowMessage(provider), 504);
+    throw new OcrError(`ติดต่อ ${provider} ไม่ได้ (${e?.code || e?.name || 'network'})`, 502);
+  }
+}
+
 // เรียกครั้งเดียวต่อหนึ่งรุ่น; ถ้า Google ตอบ 503 (ผู้ใช้หนาแน่น) หรือ 500 ลองใหม่สูงสุด 3 ครั้งแบบหน่วงเวลา
-async function geminiCall(model, { base64, mime }, env, fetchImpl) {
+async function geminiCall(model, { base64, mime }, env, fetchImpl, b) {
   const delays = [Number(env.OCR_RETRY_DELAY_MS ?? 1000), Number(env.OCR_RETRY_DELAY_MS ?? 1000) * 2.5];
   for (let attempt = 0; ; attempt += 1) {
-    const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    const res = await fetchWithin(fetchImpl, 'Gemini', b, `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
       body: JSON.stringify({
@@ -48,7 +71,7 @@ async function geminiCall(model, { base64, mime }, env, fetchImpl) {
       }),
     });
     if (res.ok) return res;
-    if ((res.status === 503 || res.status === 500) && attempt < delays.length) { await sleep(delays[attempt]); continue; }
+    if ((res.status === 503 || res.status === 500) && attempt < delays.length && b.hasTimeFor(delays[attempt])) { await sleep(delays[attempt]); continue; }
     throw httpError('Gemini', res.status);
   }
 }
@@ -56,11 +79,12 @@ async function geminiCall(model, { base64, mime }, env, fetchImpl) {
 export async function geminiProvider({ base64, mime }, env, fetchImpl = fetch) {
   if (!env.GEMINI_API_KEY) throw new OcrError('ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในเซิร์ฟเวอร์', 503);
   const models = [env.GEMINI_MODEL || 'gemini-3.8-flash', env.GEMINI_FALLBACK_MODEL].filter(Boolean);
+  const b = budget(env);
   let res;
   let used = models[0];
   for (const [i, model] of models.entries()) {
-    try { res = await geminiCall(model, { base64, mime }, env, fetchImpl); used = model; break; }
-    catch (e) { if (i === models.length - 1 || !(e instanceof OcrError) || ![503, 429].includes(e.status)) throw e; /* ลองรุ่นสำรอง */ }
+    try { res = await geminiCall(model, { base64, mime }, env, fetchImpl, b); used = model; break; }
+    catch (e) { if (i === models.length - 1 || !(e instanceof OcrError) || ![503, 429, 504].includes(e.status) || !b.hasTimeFor(0)) throw e; /* ลองรุ่นสำรองถ้ายังมีเวลา */ }
   }
   const data = await res.json();
   const out = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
@@ -73,8 +97,9 @@ export async function typhoonProvider({ dataUrl }, env, fetchImpl = fetch) {
   const key = env.TYPHOON_API_KEY;
   if (!key) throw new OcrError('ยังไม่ได้ตั้งค่า TYPHOON_API_KEY ในเซิร์ฟเวอร์', 503);
   const base = (env.TYPHOON_BASE_URL || 'https://api.opentyphoon.ai/v1').replace(/\/$/, '');
+  const b = budget(env);
   const call = async body => {
-    const res = await fetchImpl(`${base}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
+    const res = await fetchWithin(fetchImpl, 'Typhoon', b, `${base}/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
     if (!res.ok) throw httpError('Typhoon', res.status);
     const data = await res.json();
     return data?.choices?.[0]?.message?.content || '';
