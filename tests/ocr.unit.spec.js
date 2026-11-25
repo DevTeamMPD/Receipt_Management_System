@@ -143,6 +143,39 @@ test('Gemini does not retry on errors that retrying cannot fix', async () => {
   expect(calls).toHaveLength(1);
 });
 
+test('Gemini gives up within the time budget instead of hanging past the Vercel limit; the request carries an abort signal', async () => {
+  const hang = calls => (url, init) => new Promise((_, reject) => { calls.push({ url }); init.signal.addEventListener('abort', () => reject(init.signal.reason)); });
+  let calls = [];
+  const t0 = Date.now();
+  await expect(geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', OCR_TIMEOUT_MS: '30', OCR_BUDGET_MS: '1200', GEMINI_FALLBACK_MODEL: 'backup-m' }, hang(calls)))
+    .rejects.toMatchObject({ status: 504, message: expect.stringContaining('ช้าเกินไป') });
+  expect(Date.now() - t0).toBeLessThan(1500);
+  expect(calls.length).toBeGreaterThanOrEqual(1);
+  const ok = { json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } };
+  const seen = [];
+  await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k' }, fakeFetch([ok], seen));
+  expect(seen[0].init.signal).toBeInstanceOf(AbortSignal);
+});
+
+test('an OCR timeout still saves the order with the photo and reports the reason', async () => {
+  const { handle } = await import('../server/router.js');
+  const { fakeSupabase, URL_, ANON, NOW: now } = await import('./helpers/fakeSupabase.js');
+  const sb = fakeSupabase();
+  const slowGemini = async (url, init) => {
+    if (String(url).includes('generativelanguage')) return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+    return sb.fetchImpl(url, init);
+  };
+  const env = { SUPABASE_URL: URL_, SUPABASE_ANON_KEY: ANON, OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'k', OCR_TIMEOUT_MS: '20', OCR_BUDGET_MS: '200', OCR_RETRY_DELAY_MS: '0' };
+  const headers = { 'content-type': 'application/json', host: 'app.test' };
+  const login = await handle({ method: 'POST', path: '/api/auth/login', headers, body: { email: 'staff@example.com', password: 'pw' }, env, fetchImpl: slowGemini, now });
+  const cookie = login.cookies[0].split(';')[0];
+  const out = await handle({ method: 'POST', path: '/api/orders', headers: { ...headers, cookie }, body: { image: png, branch: 'สยาม' }, env, fetchImpl: slowGemini, now });
+  expect(out.status).toBe(201);
+  expect(out.body.order.ocrStatus).toBe('failed');
+  expect(out.body.ocrError).toContain('ช้าเกินไป');
+  expect(sb.db.runs[0]).toMatchObject({ ok: false, http_status: 504 });
+});
+
 test('demo provider is refused unless explicitly allowed, and OCR can be switched off', async () => {
   await expect(runOcr({ image: png }, { OCR_PROVIDER: 'mock' }, fakeFetch([]))).rejects.toMatchObject({ status: 503, message: expect.stringContaining('สาธิต') });
   const out = await runOcr({ image: png }, { OCR_PROVIDER: 'mock', OCR_ALLOW_MOCK: '1' }, fakeFetch([]), NOW);
