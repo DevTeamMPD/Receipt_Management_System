@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, Maximize2, MessageCircle, Monitor, Plus, Search, Send, Smartphone, TriangleAlert, Trash2, X } from 'lucide-react';
-import { STORAGE_KEY, branches, statusLabels, seeds, original, money, monthNames, thaiDate, ocrRawText, restore } from './data.js';
+import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, Maximize2, MessageCircle, Monitor, Plus, Search, Send, Smartphone, TriangleAlert, Trash2, Upload, X } from 'lucide-react';
+import { STORAGE_KEY, branches, statusLabels, seeds, original, money, monthNames, thaiDate, ocrRawText, restore, recordFromExtraction } from './data.js';
+import { getOcrStatus, prepareImage, runOcr } from './ocrClient.js';
 import { validate, warnings, fieldOrder } from './validation.js';
 import { formImage } from './formImage.js';
 
@@ -49,6 +50,43 @@ function ThaiDateField({ label, value, onChange, locked, error, optional }) {
     </div>
     {error && <p className="error" id={errId}><TriangleAlert size={14} aria-hidden="true" />{error}</p>}
   </div>;
+}
+
+function UploadForm({ defaultBranch, onDone }) {
+  const [status, setStatus] = useState(null);
+  const [statusErr, setStatusErr] = useState('');
+  const [file, setFile] = useState(null);
+  const [branch, setBranch] = useState(defaultBranch);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const fileId = useId();
+  const branchId = useId();
+  useEffect(() => {
+    let on = true;
+    getOcrStatus().then(v => on && setStatus(v)).catch(() => on && setStatusErr('ติดต่อเซิร์ฟเวอร์ OCR ไม่ได้ (ต้องเปิดแอปด้วย npm run dev)'));
+    return () => { on = false; };
+  }, []);
+  async function start() {
+    setBusy(true); setError('');
+    try {
+      const images = await prepareImage(file);
+      const result = await runOcr(images.ocr);
+      onDone({ result, images, branch });
+    } catch (e) { setError(e.message || 'อ่านรูปไม่สำเร็จ'); setBusy(false); }
+  }
+  const ready = !!file && !!status?.configured && !busy;
+  return <>
+    <p className="modal-desc">เลือกรูปถ่ายใบสั่งซื้อ (JPG / PNG) ระบบจะอ่านข้อมูลให้ แล้วคุณตรวจและแก้ก่อนส่งต่อ</p>
+    <div className="field"><label htmlFor={fileId}>รูปใบสั่งซื้อ</label><input id={fileId} type="file" accept="image/*" disabled={busy} onChange={e => { setFile(e.target.files?.[0] || null); setError(''); }} /></div>
+    <div className="field upload-gap"><label htmlFor={branchId}>สาขาที่ส่งมา</label><select id={branchId} value={branch} disabled={busy} onChange={e => setBranch(e.target.value)}>{branches.map(b => <option key={b} value={b}>{b}</option>)}</select></div>
+    {statusErr && <div className="banner bad"><TriangleAlert size={18} aria-hidden="true" />{statusErr}</div>}
+    {status && !status.known && <div className="banner bad"><TriangleAlert size={18} aria-hidden="true" />ตั้งค่าผู้ให้บริการ OCR ไม่ถูกต้อง ({status.provider})</div>}
+    {status && status.known && !status.configured && <div className="banner bad"><TriangleAlert size={18} aria-hidden="true" />ยังไม่ได้ใส่คีย์ของ {status.provider} ในไฟล์ .env ของเซิร์ฟเวอร์</div>}
+    {status?.demo && <div className="notice">โหมดสาธิต: ระบบ <strong>ไม่ได้อ่านรูปจริง</strong> จะสร้างข้อมูลสมมติเพื่อทดลองขั้นตอน (ตั้ง OCR_PROVIDER และคีย์ในไฟล์ .env เพื่ออ่านจริง)</div>}
+    {status && !status.demo && status.configured && <div className="notice">รูปจะถูกส่งไปที่ <strong>{status.provider}</strong> ใบสั่งซื้อมีข้อมูลลูกค้า และผู้ให้บริการชั้นฟรีอาจนำข้อมูลไปพัฒนาผลิตภัณฑ์ (ความเสี่ยงที่เจ้าของโปรเจกต์รับไว้แล้ว) — ส่งเฉพาะรูปที่ตั้งใจให้อ่าน</div>}
+    {error && <div className="banner bad" role="alert"><TriangleAlert size={18} aria-hidden="true" />{error}</div>}
+    <div className="modal-actions"><button className="btn primary" disabled={!ready} aria-busy={busy} onClick={start}>{busy ? 'กำลังอ่านรูป…' : <><Upload size={18} aria-hidden="true" />อ่านใบสั่งซื้อ</>}</button></div>
+  </>;
 }
 
 function StatusBadge({ status }) {
@@ -138,6 +176,16 @@ export default function App() {
     const next = visible[idx + 1];
     if (next) setSelectedId(next.id);
   }
+  function ocrDone({ result, images, branch: b }) {
+    const n = Math.max(0, ...receipts.map(r => Number(r.id.split('-')[1]) || 0)) + 1;
+    const row = recordFromExtraction(result, {
+      id: `RCP-${String(n).padStart(4, '0')}`, branch: b, imageData: images.thumb, existing: receipts,
+      time: new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok' }),
+    });
+    setReceipts(rs => [row, ...rs]);
+    setNewId(row.id); setSelectedId(row.id); setQuery(''); setBranch('all'); setTab('todo'); setMobileView('detail'); setDialog(null);
+    setToast(result.demo ? 'สร้างใบจากโหมดสาธิตแล้ว (ไม่ได้อ่านรูปจริง)' : `อ่านใบสั่งซื้อแล้ว ตรวจช่องสีเหลืองก่อนส่งต่อ${row.duplicateOf ? ` · อาจซ้ำกับ ${row.duplicateOf}` : ''}`);
+  }
   function simulate() {
     const n = Math.max(...receipts.map(r => Number(r.id.split('-')[1]) || 0)) + 1;
     const pad = String(n).padStart(4, '0');
@@ -171,7 +219,8 @@ export default function App() {
         <span className="chip">ข้อมูลตัวอย่าง</span>
         <button className="btn ghost layout-toggle" aria-label="มุมมองมือถือ" aria-pressed={phone} onClick={toggleLayout} title={phone ? 'กดเพื่อกลับเป็นแบบเดสก์ท็อป' : 'กดเพื่อดูแบบมือถือ'}>{phone ? <Monitor size={18} aria-hidden="true" /> : <Smartphone size={18} aria-hidden="true" />}<span className="lbl">{phone ? 'เดสก์ท็อป' : 'มือถือ'}</span></button>
         <button className="btn ghost" onClick={() => setDialog({ type: 'help' })}><CircleHelp size={18} aria-hidden="true" />วิธีใช้</button>
-        <button className="btn primary" aria-label="จำลองใบสั่งซื้อใหม่" onClick={simulate}><Plus size={18} aria-hidden="true" /><span className="lbl-long">จำลองใบสั่งซื้อใหม่</span><span className="lbl-short">จำลองใหม่</span></button>
+        <button className="btn outline simulate" aria-label="จำลองใบสั่งซื้อใหม่" onClick={simulate}><Plus size={18} aria-hidden="true" />จำลองใหม่</button>
+        <button className="btn primary" aria-label="อัปโหลดใบสั่งซื้อ" onClick={() => setDialog({ type: 'upload' })}><Upload size={18} aria-hidden="true" /><span className="lbl-long">อัปโหลดใบสั่งซื้อ</span><span className="lbl-short">อัปโหลด</span></button>
       </div>
     </header>
 
@@ -190,12 +239,12 @@ export default function App() {
         </div>
         <ul className="order-list">
           {visible.map(r => {
-            const bad = r.id !== current?.id && warnings(r).length > 0;
+            const bad = warnings(r).length > 0 || !!r.duplicateOf;
             return <li key={r.id}><button className={`order-item${r.id === current?.id ? ' active' : ''}${r.id === newId ? ' is-new' : ''}`} aria-current={r.id === current?.id ? 'true' : undefined} onClick={() => select(r.id)}>
               <span className="oi-top"><strong>{r.customerName}</strong><span className="oi-amount">฿{money(r.total)}</span></span>
               <span className="oi-meta">{r.id} · {r.billNumber}</span>
               <span className="oi-meta">Sales · {r.branch} · {r.time}</span>
-              <span className="oi-bottom"><StatusBadge status={r.status} />{bad && <span className="mini-warn" title="ยอดไม่ตรงกับใบเสร็จ"><TriangleAlert size={14} aria-hidden="true" />ยอดไม่ตรง</span>}{r.id === newId && <span className="new-tag">ใหม่</span>}</span>
+              <span className="oi-bottom"><StatusBadge status={r.status} />{bad && <span className="mini-warn"><TriangleAlert size={14} aria-hidden="true" />{r.duplicateOf ? 'อาจซ้ำ' : 'ยอดไม่ตรง'}</span>}{r.id === newId && <span className="new-tag">ใหม่</span>}</span>
             </button></li>;
           })}
         </ul>
@@ -209,7 +258,7 @@ export default function App() {
             <button className="btn ghost back" onClick={() => setMobileView('list')}><ArrowLeft size={18} aria-hidden="true" />กลับไปรายการ</button>
             <div className="dh-title">
               <h1>ใบสั่งซื้อ <span className="nowrap">{current.billNumber}</span></h1>
-              <p><span>{current.id}</span><span><MessageCircle size={14} aria-hidden="true" /> LINE · Sales {current.branch}</span><span>ผู้ส่ง {current.sender}</span><span>{current.time} น.</span><span className={current.confidence < 80 ? 'ocr low' : 'ocr'}>OCR {current.confidence}% (ตัวอย่าง)</span></p>
+              <p><span>{current.id}</span><span><MessageCircle size={14} aria-hidden="true" /> LINE · Sales {current.branch}</span><span>ผู้ส่ง {current.sender}</span><span>{current.time} น.</span><span className={current.confidence < 80 ? 'ocr low' : 'ocr'}>OCR {current.confidence}% ({current.ocrProvider === 'mock' ? 'สาธิต' : current.ocrProvider ? 'ประเมินจากกฎตรวจ' : 'ตัวอย่าง'})</span></p>
             </div>
             <StatusBadge status={current.status} />
             <button className="btn outline dh-next" onClick={goNext} disabled={visible.indexOf(current) >= visible.length - 1}>ใบถัดไป<ArrowRight size={18} aria-hidden="true" /></button>
@@ -219,15 +268,17 @@ export default function App() {
             <div className="detail-grid">
               <div className="photo-card">
                 <button className="photo" aria-label={`ขยายรูปใบสั่งซื้อ ${current.id}`} onClick={() => setDialog({ type: 'image' })}>
-                  <img src={formImage(o)} alt={`ใบสั่งซื้อตัวอย่าง ${current.id}`} />
+                  <img src={current.imageData || formImage(o)} alt={current.imageData ? `รูปใบสั่งซื้อ ${current.id}` : `ใบสั่งซื้อตัวอย่าง ${current.id}`} />
                   <span className="zoom"><Maximize2 size={16} aria-hidden="true" />คลิกเพื่อขยาย</span>
                 </button>
-                <p className="photo-note">รูปต้นฉบับ: ใบสั่งซื้อ (ซ้าย) + ใบเสร็จ POS ที่แนบ (ขวา) — เอกสารสมมติ</p>
+                <p className="photo-note">{current.imageData ? 'รูปที่อัปโหลด (ย่อขนาดและลบข้อมูล EXIF แล้ว)' : 'รูปต้นฉบับ: ใบสั่งซื้อ (ซ้าย) + ใบเสร็จ POS ที่แนบ (ขวา) — เอกสารสมมติ'}</p>
                 <button className="btn outline" onClick={() => setDialog({ type: 'ocr' })}><FileText size={18} aria-hidden="true" />ดูข้อความ OCR ดิบ</button>
               </div>
 
               <form className="form" ref={formRef} onSubmit={e => e.preventDefault()} aria-label={`ข้อมูลใบสั่งซื้อ ${current.id}`}>
                 {locked && <div className="banner info"><Check size={18} aria-hidden="true" />ใบนี้อยู่ในคิวจำลองแล้ว แก้ไขไม่ได้</div>}
+                {current.ocrProvider === 'mock' && <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" /><div><strong>ข้อมูลจากโหมดสาธิต</strong><br />ไม่ได้อ่านจากรูปนี้จริง — ใช้ทดลองขั้นตอนเท่านั้น</div></div>}
+                {current.duplicateOf && <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" /><div><strong>อาจเป็นใบซ้ำ</strong><br />เลขที่บิลและยอดตรงกับ {current.duplicateOf} — ตรวจก่อนส่งต่อ</div></div>}
                 {warn.map(w => <div className="banner warn" key={w.key}><TriangleAlert size={18} aria-hidden="true" /><div><strong>ยอดไม่ตรงกับใบเสร็จ</strong><br />ใบสั่งซื้อ ฿{money(current.total)} · ใบเสร็จ ฿{money(current.posTotal)} · ต่างกัน ฿{money(Math.abs(w.diff))} (อาจเป็นส่วนลด) — ตรวจแล้วจึงส่งต่อได้</div></div>)}
 
                 <fieldset><legend>ข้อมูลบิล</legend>
@@ -293,9 +344,10 @@ export default function App() {
     {toast && <div className="toast" role="status"><Check size={18} aria-hidden="true" />{toast}<button aria-label="ปิดข้อความ" onClick={() => setToast('')}><X size={16} /></button></div>}
 
     {dialog && <dialog ref={dialogRef} className={`modal modal-${dialog.type}`} onCancel={() => setDialog(null)} onClick={e => { if (e.target === dialogRef.current) setDialog(null); }} aria-labelledby="modal-title">
-      <div className="modal-header"><h2 id="modal-title">{dialog.type === 'image' ? `รูปต้นฉบับ · ${current.id}` : dialog.type === 'ocr' ? 'ข้อความ OCR ดิบ' : dialog.type === 'confirm' ? 'ยืนยันก่อนส่งต่อ' : 'วิธีใช้งาน'}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
-      {dialog.type === 'image' && <div className="image-viewer"><img src={formImage(o)} alt="ภาพใบสั่งซื้อตัวอย่างขนาดใหญ่" /><p>เอกสารสมมติสำหรับออกแบบ UI ไม่ใช่ใบสั่งซื้อจริง</p></div>}
-      {dialog.type === 'ocr' && <><p className="modal-desc">ข้อมูล OCR ตัวอย่างก่อนแก้ไข แยกจากฟอร์มที่คุณกำลังตรวจ</p><pre>{ocrRawText(o)}</pre></>}
+      <div className="modal-header"><h2 id="modal-title">{dialog.type === 'image' ? `รูปต้นฉบับ · ${current.id}` : dialog.type === 'ocr' ? 'ข้อความ OCR ดิบ' : dialog.type === 'confirm' ? 'ยืนยันก่อนส่งต่อ' : dialog.type === 'upload' ? 'อัปโหลดใบสั่งซื้อ' : 'วิธีใช้งาน'}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
+      {dialog.type === 'upload' && <UploadForm defaultBranch={branch === 'all' ? branches[0] : branch} onDone={ocrDone} />}
+      {dialog.type === 'image' && <div className="image-viewer"><img src={current.imageData || formImage(o)} alt="ภาพใบสั่งซื้อตัวอย่างขนาดใหญ่" />{!current.imageData && <p>เอกสารสมมติสำหรับออกแบบ UI ไม่ใช่ใบสั่งซื้อจริง</p>}</div>}
+      {dialog.type === 'ocr' && <><p className="modal-desc">ข้อมูล OCR ตัวอย่างก่อนแก้ไข แยกจากฟอร์มที่คุณกำลังตรวจ</p><pre>{current.ocrRaw || ocrRawText(o)}</pre></>}
       {dialog.type === 'confirm' && <>
         <p className="modal-desc">ตรวจข้อมูลครั้งสุดท้าย เพราะข้อมูลนี้ใช้เปิดบิลและส่งของให้ลูกค้า</p>
         <dl className="confirm">

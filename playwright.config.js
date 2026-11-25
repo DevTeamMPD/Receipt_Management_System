@@ -6,5 +6,5 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:5173', browserName: 'chromium', viewport: { width: 1440, height: 1100 },
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {},
   },
-  webServer: { command: 'npm run dev -- --port 5173', url: 'http://127.0.0.1:5173', reuseExistingServer: !process.env.CI },
+  webServer: { command: 'npm run dev -- --port 5173', env: { OCR_PROVIDER: 'mock' }, url: 'http://127.0.0.1:5173', reuseExistingServer: !process.env.CI },
 });

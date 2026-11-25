@@ -56,7 +56,22 @@ export const seeds = [
   },
 ];
 
-export const original = r => seeds.find(s => s.id === r.id) || seeds[0];
+export const original = r => r.ocrOriginal || seeds.find(s => s.id === r.id) || seeds[0];
+
+const OCR_FIELDS = ['billNumber', 'orderDate', 'customerName', 'phone', 'address', 'subDistrict', 'district', 'province', 'postcode', 'shipDate', 'remark', 'total', 'posNumber', 'posTotal'];
+
+// สร้างระเบียนใหม่จากผล OCR (ผ่าน /api/ocr) — เก็บสำเนาต้นฉบับไว้เทียบกับที่คนแก้
+export function recordFromExtraction(x, { id, branch, imageData, existing, time }) {
+  const fields = Object.fromEntries(OCR_FIELDS.map(k => [k, x[k] ?? '']));
+  fields.items = (x.items || []).map(i => ({ ...i }));
+  const dup = existing.find(r => fields.billNumber && r.billNumber.trim().toLowerCase() === fields.billNumber.toLowerCase() && Number(r.total) === Number(fields.total));
+  const needsCheck = !!dup || x.uncertain.length > 0 || x.confidence < 80 || x.docType !== 'order_form';
+  return {
+    ...fields, items: fields.items.map(i => ({ ...i })), id, branch, sender: 'อัปโหลดเอง', time, status: needsCheck ? 'check' : 'review',
+    confidence: x.confidence, uncertain: [...x.uncertain], imageData, ocrOriginal: { ...fields, items: fields.items.map(i => ({ ...i })) },
+    ocrRaw: x.rawText || '', ocrProvider: x.provider, ocrDocType: x.docType, duplicateOf: dup ? dup.id : '',
+  };
+}
 
 const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
 export const monthNames = months;
