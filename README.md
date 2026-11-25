@@ -57,7 +57,7 @@ npm run dev
 
 ## ขึ้นระบบจริง (Vercel)
 
-- `api/[...path].js` คือ Vercel Function ที่ใช้ตรรกะเดียวกับตอน dev; `vercel.json` ตั้งเวลารันสูงสุด 60 วินาที (การอ่านรูปอาจนาน — เช็กว่าแผนของคุณรองรับ) และเพิ่ม security headers
+- `api/index.js` คือ Vercel Function เดียวที่รับทุกเส้นทาง `/api/*` (ผ่าน rewrite ใน `vercel.json`) ใช้ตรรกะเดียวกับตอน dev; `vercel.json` ตั้งเวลารันสูงสุด 60 วินาที (การอ่านรูปอาจนาน — เช็กว่าแผนของคุณรองรับ) และเพิ่ม security headers
 - ตั้ง environment variables ตามตารางด้านบนใน Vercel (อย่าตั้ง `OCR_ALLOW_MOCK`) แล้ว deploy
 - คุกกี้ใช้ `Secure` อัตโนมัติเมื่ออยู่หลัง https
 - ขนาดรูปที่ส่งต้องไม่เกินประมาณ 4.5MB (ขีดจำกัดของ Vercel) — เบราว์เซอร์ย่อรูปให้อยู่ในเกณฑ์แล้ว
