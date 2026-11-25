@@ -119,3 +119,25 @@ test('status reports whether the selected provider has its key, defaulting to de
   expect(ocrStatus({ OCR_PROVIDER: 'gemini' })).toMatchObject({ configured: false });
   expect(ocrStatus({ OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'x' })).toMatchObject({ configured: true, demo: false });
 });
+
+test('Gemini retries when the model is busy (503), then falls back to the backup model', async () => {
+  const ok = { json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } };
+  const env = { GEMINI_API_KEY: 'k', OCR_RETRY_DELAY_MS: '0' };
+  let calls = [];
+  const out = await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, env, fakeFetch([{ status: 503 }, { status: 503 }, ok], calls));
+  expect(out.raw.billNumber).toBe('OD-1');
+  expect(calls).toHaveLength(3);
+  calls = [];
+  await expect(geminiProvider({ base64: 'QUJD', mime: 'image/png' }, env, fakeFetch([{ status: 503 }, { status: 503 }, { status: 503 }], calls))).rejects.toMatchObject({ status: 503, message: expect.stringContaining('หนาแน่น') });
+  expect(calls).toHaveLength(3);
+  calls = [];
+  await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { ...env, GEMINI_FALLBACK_MODEL: 'backup-m' }, fakeFetch([{ status: 503 }, { status: 503 }, { status: 503 }, ok], calls));
+  expect(calls).toHaveLength(4);
+  expect(calls[3].url).toContain('/models/backup-m:generateContent');
+});
+
+test('Gemini does not retry on errors that retrying cannot fix', async () => {
+  const calls = [];
+  await expect(geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', OCR_RETRY_DELAY_MS: '0' }, fakeFetch([{ status: 403 }], calls))).rejects.toMatchObject({ status: 502 });
+  expect(calls).toHaveLength(1);
+});

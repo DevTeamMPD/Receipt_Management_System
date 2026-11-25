@@ -15,6 +15,7 @@ export function parseJsonLoose(textValue) {
 
 function httpError(provider, status) {
   if (status === 429) return new OcrError(`โควตา ${provider} เต็มชั่วคราว ลองใหม่ภายหลังหรือให้คนพิมพ์เอง`, 429);
+  if (status === 503) return new OcrError(`${provider} กำลังมีผู้ใช้งานหนาแน่น ลองใหม่อีกครั้งในอีกสักครู่ หรือให้คนพิมพ์เอง`, 503);
   if (status === 401 || status === 403) return new OcrError(`คีย์ ${provider} ไม่ถูกต้องหรือไม่มีสิทธิ์`, 502);
   if (status === 400) return new OcrError(`${provider} ปฏิเสธคำขอ (รูปอาจใหญ่เกินไปหรือรุ่นโมเดลไม่ถูกต้อง)`, 502);
   return new OcrError(`${provider} ตอบกลับผิดพลาด (${status})`, 502);
@@ -31,20 +32,35 @@ export async function mockProvider({ base64 }) {
   return { raw, rawText: JSON.stringify(raw, null, 2) };
 }
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// เรียกครั้งเดียวต่อหนึ่งรุ่น; ถ้า Google ตอบ 503 (ผู้ใช้หนาแน่น) หรือ 500 ลองใหม่สูงสุด 3 ครั้งแบบหน่วงเวลา
+async function geminiCall(model, { base64, mime }, env, fetchImpl) {
+  const delays = [Number(env.OCR_RETRY_DELAY_MS ?? 1000), Number(env.OCR_RETRY_DELAY_MS ?? 1000) * 2.5];
+  for (let attempt = 0; ; attempt += 1) {
+    const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: mime, data: base64 } }] }],
+        // ไม่ส่ง temperature เป็นค่าเริ่มต้น (รุ่น Gemini 3 ขึ้นไปแนะนำให้ใช้ค่ามาตรฐาน) ตั้ง GEMINI_TEMPERATURE ได้ถ้าต้องการ
+        generationConfig: { responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA, ...(env.GEMINI_TEMPERATURE ? { temperature: Number(env.GEMINI_TEMPERATURE) } : {}) },
+      }),
+    });
+    if (res.ok) return res;
+    if ((res.status === 503 || res.status === 500) && attempt < delays.length) { await sleep(delays[attempt]); continue; }
+    throw httpError('Gemini', res.status);
+  }
+}
+
 export async function geminiProvider({ base64, mime }, env, fetchImpl = fetch) {
-  const key = env.GEMINI_API_KEY;
-  if (!key) throw new OcrError('ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในเซิร์ฟเวอร์', 503);
-  const model = env.GEMINI_MODEL || 'gemini-3.8-flash';
-  const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: mime, data: base64 } }] }],
-      // ไม่ส่ง temperature เป็นค่าเริ่มต้น (รุ่น Gemini 3 ขึ้นไปแนะนำให้ใช้ค่ามาตรฐาน) ตั้ง GEMINI_TEMPERATURE ได้ถ้าต้องการ
-      generationConfig: { responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA, ...(env.GEMINI_TEMPERATURE ? { temperature: Number(env.GEMINI_TEMPERATURE) } : {}) },
-    }),
-  });
-  if (!res.ok) throw httpError('Gemini', res.status);
+  if (!env.GEMINI_API_KEY) throw new OcrError('ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในเซิร์ฟเวอร์', 503);
+  const models = [env.GEMINI_MODEL || 'gemini-3.8-flash', env.GEMINI_FALLBACK_MODEL].filter(Boolean);
+  let res;
+  for (const [i, model] of models.entries()) {
+    try { res = await geminiCall(model, { base64, mime }, env, fetchImpl); break; }
+    catch (e) { if (i === models.length - 1 || !(e instanceof OcrError) || ![503, 429].includes(e.status)) throw e; /* ลองรุ่นสำรอง */ }
+  }
   const data = await res.json();
   const out = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
   if (!out) throw new OcrError('Gemini ไม่ได้ตอบข้อมูลกลับมา (รูปอาจไม่ชัดหรือถูกกรอง)', 502);

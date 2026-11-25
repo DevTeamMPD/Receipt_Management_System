@@ -26,6 +26,7 @@ async function checkGemini() {
   if (e.status === 'ACCESS_TOKEN_TYPE_UNSUPPORTED') return say(false, 'Gemini', `คีย์ชนิดนี้ (AQ.) ใช้ไม่ได้กับบัญชี/โปรเจกต์นี้ ลองสร้างคีย์ผ่าน Google Cloud Console หรือใช้บัญชี/โปรเจกต์อื่น ${detail}`);
   if (res.status === 400 && /API key not valid|API_KEY_INVALID/i.test(`${e.message} ${JSON.stringify(e.details || '')}`)) return say(false, 'Gemini', `คีย์ไม่ถูกต้อง (คัดลอกไม่ครบ มีช่องว่างปน หรือคีย์ถูกลบแล้ว?) ${detail}`);
   if (res.status === 401 || res.status === 403) return say(false, 'Gemini', `คีย์ถูกปฏิเสธ (ไม่มีสิทธิ์หรือถูกจำกัด) ${detail}`);
+  if (res.status === 503) return say(true, 'Gemini', `คีย์และชื่อรุ่นถูกต้อง แต่ Google บอกว่ารุ่น ${model} มีผู้ใช้หนาแน่นชั่วคราว — รอสักครู่แล้วรันใหม่ หรือตั้ง GEMINI_FALLBACK_MODEL เป็นรุ่นสำรอง ${detail}`);
   if (res.status === 429) return say(false, 'Gemini', `คีย์ใช้ได้ แต่โควตาเต็มชั่วคราว รอสักพักแล้วลองใหม่ ${detail}`);
   if (res.status === 404) {
     say(false, 'Gemini', `ไม่พบรุ่น "${model}" ให้ตั้ง GEMINI_MODEL เป็นรุ่นอื่น ${detail}`);
