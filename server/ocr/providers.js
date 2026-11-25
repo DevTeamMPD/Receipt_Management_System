@@ -34,13 +34,14 @@ export async function mockProvider({ base64 }) {
 export async function geminiProvider({ base64, mime }, env, fetchImpl = fetch) {
   const key = env.GEMINI_API_KEY;
   if (!key) throw new OcrError('ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในเซิร์ฟเวอร์', 503);
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = env.GEMINI_MODEL || 'gemini-3.8-flash';
   const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify({
       contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: mime, data: base64 } }] }],
-      generationConfig: { responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA, temperature: 0 },
+      // ไม่ส่ง temperature เป็นค่าเริ่มต้น (รุ่น Gemini 3 ขึ้นไปแนะนำให้ใช้ค่ามาตรฐาน) ตั้ง GEMINI_TEMPERATURE ได้ถ้าต้องการ
+      generationConfig: { responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA, ...(env.GEMINI_TEMPERATURE ? { temperature: Number(env.GEMINI_TEMPERATURE) } : {}) },
     }),
   });
   if (!res.ok) throw httpError('Gemini', res.status);

@@ -7,7 +7,7 @@ const short = s => String(s || '').replace(/\s+/g, ' ').slice(0, 220);
 async function checkGemini() {
   const key = env.GEMINI_API_KEY;
   if (!key) return say(false, 'Gemini', 'ยังไม่ได้ใส่ GEMINI_API_KEY ในไฟล์ .env (ข้ามการตรวจ)');
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = env.GEMINI_MODEL || 'gemini-3.8-flash';
   const base = 'https://generativelanguage.googleapis.com/v1beta';
   let res;
   try {

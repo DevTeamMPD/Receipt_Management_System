@@ -68,6 +68,16 @@ test('Gemini request carries the key in a header, the image inline and a respons
   expect(parts[1].inline_data).toEqual({ mime_type: 'image/jpeg', data: 'QUJD' });
   expect(calls[0].body.generationConfig.responseMimeType).toBe('application/json');
   expect(calls[0].body.generationConfig.responseSchema.properties.items.type).toBe('ARRAY');
+  expect(calls[0].body.generationConfig).not.toHaveProperty('temperature');
+});
+
+test('Gemini default model is current and temperature is only sent when configured', async () => {
+  const calls = [];
+  const ok = () => ({ json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } });
+  await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k' }, fakeFetch([ok()], calls));
+  expect(calls[0].url).toContain('/models/gemini-3.8-flash:generateContent');
+  await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', GEMINI_TEMPERATURE: '0.2' }, fakeFetch([ok()], calls));
+  expect(calls[1].body.generationConfig.temperature).toBe(0.2);
 });
 
 test('Gemini errors become clear Thai messages with the right status', async () => {

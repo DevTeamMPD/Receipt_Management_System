@@ -47,7 +47,7 @@ npm run dev
 | `OCR_PROVIDER` | ทำอะไร | ต้องใส่ใน `.env` |
 |---|---|---|
 | `mock` (ค่าเริ่มต้น) | **โหมดสาธิต ไม่ได้อ่านรูปจริง** คืนข้อมูลสมมติเพื่อทดลองขั้นตอน | — |
-| `gemini` | ส่งรูปให้ Gemini API คืน JSON ตาม schema | `GEMINI_API_KEY` (`GEMINI_MODEL` ไม่บังคับ ค่าเริ่มต้น `gemini-2.5-flash` — ตรวจรุ่นและโควตาที่ AI Studio) |
+| `gemini` | ส่งรูปให้ Gemini API คืน JSON ตาม schema | `GEMINI_API_KEY` (`GEMINI_MODEL` ไม่บังคับ ค่าเริ่มต้น `gemini-3.8-flash` — ชื่อรุ่นเปลี่ยนบ่อย รัน `npm run check-keys` เพื่อดูรุ่นที่ใช้ได้กับคีย์ และตรวจโควตาที่ AI Studio; `GEMINI_TEMPERATURE` ไม่บังคับ) |
 | `typhoon` | OCR ด้วย Typhoon แล้วดึงฟิลด์ด้วยโมเดลข้อความ (ทดลอง) | `TYPHOON_API_KEY` |
 
 - คีย์อยู่ฝั่งเซิร์ฟเวอร์ (Vite dev server, `server/`) ไม่ถูกส่งไปที่เบราว์เซอร์ เบราว์เซอร์ย่อรูป (ลบ EXIF) แล้วส่งเฉพาะรูป ไม่ส่งชื่อผู้ส่งหรือข้อมูลอื่น
