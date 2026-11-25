@@ -154,3 +154,59 @@ test('layout toggle shows the phone layout on a desktop screen and remembers it'
   await expect(page.locator('.list-pane')).toBeVisible();
   expect((await page.locator('.frame').boundingBox()).width).toBeGreaterThan(1000);
 });
+
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const upload = async (page, branch) => {
+  await page.getByRole('button', { name: 'อัปโหลดใบสั่งซื้อ' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('รูปใบสั่งซื้อ').setInputFiles({ name: 'order.png', mimeType: 'image/png', buffer: PNG });
+  if (branch) await dialog.getByLabel('สาขาที่ส่งมา').selectOption(branch);
+  await dialog.getByRole('button', { name: 'อ่านใบสั่งซื้อ' }).click();
+};
+
+test('uploading a photo reads it, adds a new order on top and keeps the image after reload (demo provider)', async ({ page, request }) => {
+  test.skip((await (await request.get('/api/ocr/status')).json()).provider !== 'mock', 'ต้องรันกับโหมดสาธิต');
+  await page.getByRole('button', { name: 'อัปโหลดใบสั่งซื้อ' }).click();
+  await expect(page.getByRole('dialog')).toContainText('ไม่ได้อ่านรูปจริง');
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'อ่านใบสั่งซื้อ' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await upload(page, 'บางนา');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.order-list li').first()).toContainText('RCP-0025');
+  await expect(page.locator('.order-list li').first()).toContainText('Sales · บางนา');
+  await expect(page.getByLabel('ชื่อลูกค้า')).toHaveValue(/ลูกค้าสาธิต/);
+  await expect(page.getByText('ข้อมูลจากโหมดสาธิต')).toBeVisible();
+  await expect(page.getByRole('img', { name: 'รูปใบสั่งซื้อ RCP-0025' })).toHaveAttribute('src', /^data:image\/jpeg/);
+  await page.getByRole('button', { name: 'ดูข้อความ OCR ดิบ' }).click();
+  await expect(page.getByRole('dialog')).toContainText('docType');
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await expect(page.getByRole('img', { name: 'รูปใบสั่งซื้อ RCP-0025' })).toBeVisible();
+});
+
+test('uploading the same photo twice flags the second order as a possible duplicate', async ({ page, request }) => {
+  test.skip((await (await request.get('/api/ocr/status')).json()).provider !== 'mock', 'ต้องรันกับโหมดสาธิต');
+  await upload(page);
+  await upload(page);
+  await expect(page.locator('.order-list li').first()).toContainText('RCP-0026');
+  await expect(page.getByText('อาจเป็นใบซ้ำ')).toBeVisible();
+  await expect(page.getByText('เลขที่บิลและยอดตรงกับ RCP-0025')).toBeVisible();
+  await expect(page.locator('.order-list li').first()).toContainText('อาจซ้ำ');
+});
+
+test('an OCR failure shows the reason, adds nothing, and lets the user retry', async ({ page }) => {
+  await page.route('**/api/ocr', route => route.request().method() === 'POST' ? route.fulfill({ status: 429, json: { error: 'โควตา Gemini เต็มชั่วคราว ลองใหม่ภายหลังหรือให้คนพิมพ์เอง' } }) : route.continue());
+  await upload(page);
+  await expect(page.getByRole('alert')).toContainText('โควตา Gemini เต็มชั่วคราว');
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'อ่านใบสั่งซื้อ' })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.order-list li')).toHaveCount(3);
+});
+
+test('a provider without its key is reported before any photo is sent', async ({ page }) => {
+  await page.route('**/api/ocr/status', route => route.fulfill({ json: { provider: 'gemini', demo: false, configured: false, known: true } }));
+  await page.getByRole('button', { name: 'อัปโหลดใบสั่งซื้อ' }).click();
+  await expect(page.getByRole('dialog')).toContainText('ยังไม่ได้ใส่คีย์ของ gemini');
+  await page.getByRole('dialog').getByLabel('รูปใบสั่งซื้อ').setInputFiles({ name: 'order.png', mimeType: 'image/png', buffer: PNG });
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'อ่านใบสั่งซื้อ' })).toBeDisabled();
+});
