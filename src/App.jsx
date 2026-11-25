@@ -170,6 +170,17 @@ export default function App() {
     if (next) setSelectedId(next.id);
     setToast(`${r.id} เข้าคิวจำลองแล้ว — ยังไม่ได้ส่งเข้า JST จริง${next ? ' · เปิดใบถัดไปให้แล้ว' : ''}`);
   }
+  function confirmDelete() {
+    const id = dialog?.id;
+    if (!id) { setDialog(null); return; }
+    const idx = visible.findIndex(v => v.id === id);
+    const next = visible[idx + 1] || visible[idx - 1] || null;
+    setReceipts(rs => rs.filter(x => x.id !== id));
+    setShown(s => { const n = new Set(s); n.delete(id); return n; });
+    setDialog(null);
+    if (selectedId === id) setSelectedId(next ? next.id : null);
+    setToast(`ลบ ${id} ออกจากรายการแล้ว`);
+  }
   function goNext() {
     if (!current) return;
     const idx = visible.findIndex(v => v.id === current.id);
@@ -240,12 +251,12 @@ export default function App() {
         <ul className="order-list">
           {visible.map(r => {
             const bad = warnings(r).length > 0 || !!r.duplicateOf;
-            return <li key={r.id}><button className={`order-item${r.id === current?.id ? ' active' : ''}${r.id === newId ? ' is-new' : ''}`} aria-current={r.id === current?.id ? 'true' : undefined} onClick={() => select(r.id)}>
+            return <li key={r.id} className="order-row"><button className={`order-item${r.id === current?.id ? ' active' : ''}${r.id === newId ? ' is-new' : ''}`} aria-current={r.id === current?.id ? 'true' : undefined} onClick={() => select(r.id)}>
               <span className="oi-top"><strong>{r.customerName}</strong><span className="oi-amount">฿{money(r.total)}</span></span>
               <span className="oi-meta">{r.id} · {r.billNumber}</span>
               <span className="oi-meta">Sales · {r.branch} · {r.time}</span>
               <span className="oi-bottom"><StatusBadge status={r.status} />{bad && <span className="mini-warn"><TriangleAlert size={14} aria-hidden="true" />{r.duplicateOf ? 'อาจซ้ำ' : 'ยอดไม่ตรง'}</span>}{r.id === newId && <span className="new-tag">ใหม่</span>}</span>
-            </button></li>;
+            </button><button className="icon-btn danger oi-delete" aria-label={`ลบ ${r.id}`} title="ลบใบเสร็จนี้ (กรณีดึงมาผิด)" onClick={() => setDialog({ type: 'delete', id: r.id })}><Trash2 size={16} aria-hidden="true" /></button></li>;
           })}
         </ul>
         {!visible.length && <div className="empty"><Search size={28} aria-hidden="true" /><h3>ไม่พบใบสั่งซื้อที่ค้นหา</h3><p>ลองเปลี่ยนคำค้นหรือเลือกสาขาอื่น</p><button className="btn outline" onClick={() => { setQuery(''); setBranch('all'); setTab('all'); }}>ล้างตัวกรอง</button></div>}
@@ -344,7 +355,7 @@ export default function App() {
     {toast && <div className="toast" role="status"><Check size={18} aria-hidden="true" />{toast}<button aria-label="ปิดข้อความ" onClick={() => setToast('')}><X size={16} /></button></div>}
 
     {dialog && <dialog ref={dialogRef} className={`modal modal-${dialog.type}`} onCancel={() => setDialog(null)} onClick={e => { if (e.target === dialogRef.current) setDialog(null); }} aria-labelledby="modal-title">
-      <div className="modal-header"><h2 id="modal-title">{dialog.type === 'image' ? `รูปต้นฉบับ · ${current.id}` : dialog.type === 'ocr' ? 'ข้อความ OCR ดิบ' : dialog.type === 'confirm' ? 'ยืนยันก่อนส่งต่อ' : dialog.type === 'upload' ? 'อัปโหลดใบสั่งซื้อ' : 'วิธีใช้งาน'}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
+      <div className="modal-header"><h2 id="modal-title">{dialog.type === 'image' ? `รูปต้นฉบับ · ${current.id}` : dialog.type === 'ocr' ? 'ข้อความ OCR ดิบ' : dialog.type === 'confirm' ? 'ยืนยันก่อนส่งต่อ' : dialog.type === 'delete' ? 'ลบใบเสร็จนี้?' : dialog.type === 'upload' ? 'อัปโหลดใบสั่งซื้อ' : 'วิธีใช้งาน'}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
       {dialog.type === 'upload' && <UploadForm defaultBranch={branch === 'all' ? branches[0] : branch} onDone={ocrDone} />}
       {dialog.type === 'image' && <div className="image-viewer"><img src={current.imageData || formImage(o)} alt="ภาพใบสั่งซื้อตัวอย่างขนาดใหญ่" />{!current.imageData && <p>เอกสารสมมติสำหรับออกแบบ UI ไม่ใช่ใบสั่งซื้อจริง</p>}</div>}
       {dialog.type === 'ocr' && <><p className="modal-desc">ข้อมูล OCR ตัวอย่างก่อนแก้ไข แยกจากฟอร์มที่คุณกำลังตรวจ</p><pre>{current.ocrRaw || ocrRawText(o)}</pre></>}
@@ -363,6 +374,16 @@ export default function App() {
         <div className="notice">นี่เป็นต้นแบบ — ระบบจะเพียงจัดคิวจำลองในเบราว์เซอร์นี้ ยังไม่ส่งเข้า JST จริง</div>
         <div className="modal-actions"><button className="btn outline" onClick={() => setDialog(null)}>กลับไปตรวจ</button><button className="btn primary" onClick={confirmSend}><Send size={18} aria-hidden="true" />ยืนยันเข้าคิวจำลอง</button></div>
       </>}
+      {dialog.type === 'delete' && (() => { const d = receipts.find(x => x.id === dialog.id); return d ? <>
+        <p className="modal-desc">ใช้เมื่อระบบดึงใบเสร็จมาผิด ลบแล้วจะหายจากรายการนี้ทันที</p>
+        <dl className="confirm">
+          <div><dt>ใบสั่งซื้อ</dt><dd>{d.billNumber} ({d.id})</dd></div>
+          <div><dt>ลูกค้า</dt><dd>{d.customerName}</dd></div>
+          <div><dt>ยอดรวม</dt><dd className="confirm-total">฿{money(d.total)}</dd></div>
+        </dl>
+        <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" />ลบแล้วกู้คืนไม่ได้</div>
+        <div className="modal-actions"><button className="btn outline" onClick={() => setDialog(null)}>ยกเลิก</button><button className="btn danger" onClick={confirmDelete}><Trash2 size={18} aria-hidden="true" />ลบใบเสร็จ</button></div>
+      </> : <p className="modal-desc">ไม่พบใบเสร็จนี้แล้ว</p>; })()}
       {dialog.type === 'help' && <><p className="modal-desc">ต้นแบบหน้าจอสำหรับตรวจใบสั่งซื้อที่ Sales ส่งมาทาง LINE</p>
         <ol className="help-list"><li>เลือกใบสั่งซื้อจากรายการด้านซ้าย</li><li>เทียบรูปทางซ้ายกับฟอร์มทางขวา แก้ช่องที่ผิด (ช่องสีเหลืองคือที่ OCR ไม่แน่ใจ)</li><li>ระบบบันทึกให้อัตโนมัติ ไม่ต้องกดบันทึก</li><li>กด "ยืนยันและส่งต่อเข้า JST" เมื่อข้อมูลถูกต้อง แล้วระบบจะเปิดใบถัดไปให้</li></ol>
         <div className="notice">ข้อมูลทั้งหมดเป็นข้อมูลสมมติ เก็บในเบราว์เซอร์นี้เท่านั้น ยังไม่เชื่อมต่อ LINE, OCR หรือ JST จริง ห้ามกรอกข้อมูลลูกค้าจริง</div></>}
