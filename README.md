@@ -40,6 +40,7 @@ npm run preview
 
 ```sh
 cp .env.example .env     # ใส่ OCR_PROVIDER และคีย์ (ไฟล์ .env ไม่ถูก commit)
+npm run check-keys       # ตรวจว่าคีย์ใช้ได้ไหม (ไม่พิมพ์คีย์ออกหน้าจอ)
 npm run dev
 ```
 
