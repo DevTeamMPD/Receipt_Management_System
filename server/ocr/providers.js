@@ -29,7 +29,7 @@ export async function mockProvider({ base64 }) {
     { docType: 'order_form', billNumber: 'OD-DEMO-C3', orderDateText: '25/11/69', customerName: 'ลูกค้าสาธิต สาม', phone: '0800000033', address: '5 ซอยสาธิต 3', subDistrict: 'สวนใหญ่', district: 'เมืองนนทบุรี', province: 'นนทบุรี', postcode: '11000', shipDateText: '', items: [], remark: '', total: '1290', posNumber: '', posTotal: '', uncertain: ['address'] },
   ];
   const raw = templates[base64.length % templates.length];
-  return { raw, rawText: JSON.stringify(raw, null, 2) };
+  return { raw, rawText: JSON.stringify(raw, null, 2), model: 'mock' };
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -57,14 +57,15 @@ export async function geminiProvider({ base64, mime }, env, fetchImpl = fetch) {
   if (!env.GEMINI_API_KEY) throw new OcrError('ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในเซิร์ฟเวอร์', 503);
   const models = [env.GEMINI_MODEL || 'gemini-3.8-flash', env.GEMINI_FALLBACK_MODEL].filter(Boolean);
   let res;
+  let used = models[0];
   for (const [i, model] of models.entries()) {
-    try { res = await geminiCall(model, { base64, mime }, env, fetchImpl); break; }
+    try { res = await geminiCall(model, { base64, mime }, env, fetchImpl); used = model; break; }
     catch (e) { if (i === models.length - 1 || !(e instanceof OcrError) || ![503, 429].includes(e.status)) throw e; /* ลองรุ่นสำรอง */ }
   }
   const data = await res.json();
   const out = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
   if (!out) throw new OcrError('Gemini ไม่ได้ตอบข้อมูลกลับมา (รูปอาจไม่ชัดหรือถูกกรอง)', 502);
-  return { raw: parseJsonLoose(out), rawText: out };
+  return { raw: parseJsonLoose(out), rawText: out, model: used };
 }
 
 // Typhoon OCR คืนเป็นข้อความ จึงต้องมีขั้นที่สองเพื่อดึงฟิลด์ (ยังไม่ได้ทดสอบกับ API จริง)
@@ -89,7 +90,7 @@ export async function typhoonProvider({ dataUrl }, env, fetchImpl = fetch) {
     messages: [{ role: 'system', content: PROMPT }, { role: 'user', content: `Text read from the photo by OCR:\n\n${ocrText}` }],
     temperature: 0,
   });
-  return { raw: parseJsonLoose(structured), rawText: ocrText };
+  return { raw: parseJsonLoose(structured), rawText: ocrText, model: env.TYPHOON_OCR_MODEL || 'typhoon-ocr' };
 }
 
 export const providers = { mock: mockProvider, gemini: geminiProvider, typhoon: typhoonProvider };

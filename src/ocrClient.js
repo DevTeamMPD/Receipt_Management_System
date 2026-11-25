@@ -1,9 +1,5 @@
-// ฝั่งเบราว์เซอร์: ย่อรูป (ลบ EXIF ด้วยการวาดใหม่) แล้วส่งให้เซิร์ฟเวอร์อ่าน — คีย์ผู้ให้บริการอยู่ฝั่งเซิร์ฟเวอร์เท่านั้น
-export async function getOcrStatus() {
-  const res = await fetch('/api/ocr/status');
-  if (!res.ok) throw new Error('status');
-  return res.json();
-}
+// ย่อรูปและลบ EXIF (วาดใหม่บน canvas) ก่อนส่งให้เซิร์ฟเวอร์ — รูปที่ส่งต้องไม่เกินประมาณ 3MB (ขีดจำกัดของ Vercel ~4.5MB)
+const MAX_DATA_URL = 3_200_000;
 
 export async function prepareImage(file) {
   let bitmap;
@@ -19,18 +15,12 @@ export async function prepareImage(file) {
     ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     return canvas.toDataURL('image/jpeg', quality);
   };
-  // ocr = ความละเอียดสูงพอสำหรับตัวอักษรเล็กบนใบเสร็จ, thumb = เล็กกว่าเพื่อเก็บใน localStorage
-  const images = { ocr: draw(1600, 0.85), thumb: draw(1000, 0.6) };
+  let out = '';
+  for (const [size, quality] of [[1600, 0.85], [1600, 0.7], [1400, 0.7], [1200, 0.65], [1000, 0.6]]) {
+    out = draw(size, quality);
+    if (out.length <= MAX_DATA_URL) break;
+  }
   bitmap.close?.();
-  return images;
-}
-
-export async function runOcr(imageDataUrl) {
-  let res;
-  try {
-    res = await fetch('/api/ocr', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ image: imageDataUrl }) });
-  } catch { throw new Error('ติดต่อเซิร์ฟเวอร์ OCR ไม่ได้'); }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'อ่านรูปไม่สำเร็จ');
-  return data;
+  if (out.length > MAX_DATA_URL) throw new Error('รูปใหญ่เกินไป ลองถ่ายใหม่ให้ไฟล์เล็กลง');
+  return out;
 }
