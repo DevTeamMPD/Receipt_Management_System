@@ -60,6 +60,13 @@ export function fakeSupabase() {
           hit.forEach(o => { Object.assign(o, body); o.version += 1; });
           return res(200, hit);
         }
+        if (method === 'DELETE') {
+          const hit = db.orders.filter(o => matches(o, u.searchParams));
+          db.orders = db.orders.filter(o => !hit.includes(o));
+          db.items = db.items.filter(i => !hit.some(o => o.id === i.order_id));
+          db.events.forEach(e => { if (hit.some(o => o.id === e.order_id)) e.order_id = null; });
+          return res(200, hit);
+        }
       }
       if (t === 'receipt_order_items' && method === 'POST') { db.items.push(...[].concat(body)); return res(201, null); }
       if (t === 'receipt_events') {
@@ -79,6 +86,10 @@ export function fakeSupabase() {
     if (u.pathname.startsWith('/storage/v1/object/sign/')) {
       if (!usr?.allowed) return res(403, {});
       return res(200, body.paths.map(p => ({ path: p, signedURL: `/object/sign/receipt-images/${p}?token=t` })));
+    }
+    if (u.pathname === '/storage/v1/object/receipt-images' && method === 'DELETE') {
+      if (!usr?.allowed) return res(403, {});
+      db.removed = (db.removed || []).concat(body.prefixes); return res(200, []);
     }
     if (u.pathname.startsWith('/storage/v1/object/receipt-images/')) {
       if (!usr?.allowed) return res(403, {});

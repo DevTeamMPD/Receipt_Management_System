@@ -23,5 +23,6 @@ export const api = {
   orders: () => call('GET', '/api/orders'),
   createOrder: (image, branch) => call('POST', '/api/orders', { image, branch }),
   save: (id, version, fields, items) => call('PATCH', `/api/orders/${id}`, { version, fields, ...(items ? { items } : {}) }),
+  remove: (id, version) => call('DELETE', `/api/orders/${id}`, { version }),
   act: (id, action, version, extra = {}) => call('POST', `/api/orders/${id}/${action}`, { version, ...extra }),
 };

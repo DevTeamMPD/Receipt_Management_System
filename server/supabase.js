@@ -59,6 +59,11 @@ export function supabase(env, fetchImpl = fetch) {
       const res = await fetchImpl(`${url}/storage/v1/object/${bucket}/${path}`, { method: 'POST', headers: { ...baseHeaders(token), 'content-type': contentType, 'x-upsert': 'false' }, body: bytes });
       if (!res.ok) throw new ApiError(502, 'บันทึกรูปไม่สำเร็จ', { code: `storage_${res.status}` });
     },
+    async remove(token, bucket, paths) {
+      if (!paths.length) return;
+      const res = await fetchImpl(`${url}/storage/v1/object/${bucket}`, { method: 'DELETE', headers: { ...baseHeaders(token), 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: paths }) });
+      if (!res.ok) throw new ApiError(502, 'ลบรูปไม่สำเร็จ', { code: `storage_${res.status}` });
+    },
     async sign(token, bucket, paths, expiresIn = 3600) {
       if (!paths.length) return {};
       const res = await fetchImpl(`${url}/storage/v1/object/sign/${bucket}`, { method: 'POST', headers: { ...baseHeaders(token), 'content-type': 'application/json' }, body: JSON.stringify({ expiresIn, paths }) });

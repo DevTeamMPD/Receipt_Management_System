@@ -290,6 +290,28 @@ export default function App() {
       : order.ocrStatus === 'skipped' ? 'เก็บรูปแล้ว — กรอกข้อมูลจากรูปได้เลย'
         : `อ่านใบสั่งซื้อแล้ว ตรวจช่องสีเหลืองก่อนยืนยัน${order.duplicateOf ? ` · อาจซ้ำกับ ${order.duplicateOf}` : ''}`);
   }
+  // ลบใบที่ดึงมาผิด (เฉพาะใบที่ยังรอตรวจ) — ให้ API/ฐานข้อมูลเป็นผู้ตัดสิน แล้วค่อยเอาออกจากรายการ
+  async function removeOrder() {
+    const id = dialog?.id;
+    const o = ordersRef.current.find(x => x.id === id);
+    if (!o || busy) return;
+    setBusy(true);
+    try {
+      pending.current[o.id] = null; delete inflight.current[o.id];
+      await api.remove(o.id, o.version);
+      const idx = visible.findIndex(v => v.id === o.id);
+      const next = visible.slice(idx + 1).find(v => v.id !== o.id) || visible.slice(0, idx).reverse()[0] || null;
+      mutate(os => os.filter(x => x.id !== o.id));
+      setDialog(null);
+      if (selectedId === o.id || !selectedId) setSelectedId(next ? next.id : null);
+      setToast(`ลบ ${o.code} แล้ว`);
+    } catch (e) {
+      if (handleAuthError(e)) return;
+      setDialog(null);
+      setToast(e.message);
+      if (e.code === 'conflict' || e.code === 'locked' || e.status === 404) await refresh();
+    } finally { setBusy(false); }
+  }
   const setItem = (i, key, value) => update(current.id, 'items', current.items.map((it, j) => (j === i ? { ...it, [key]: value } : it)));
   const err = k => (showErrors ? errors[k] : undefined);
   const unsure = k => !!current?.uncertain?.includes(k) && !locked;
@@ -338,12 +360,12 @@ export default function App() {
           <ul className="order-list">
             {visible.map(o => {
               const bad = warnings(o).length > 0 || !!o.duplicateOf;
-              return <li key={o.id}><button className={`order-item${o.id === current?.id ? ' active' : ''}${o.id === newId ? ' is-new' : ''}`} aria-current={o.id === current?.id ? 'true' : undefined} onClick={() => select(o.id)}>
+              return <li key={o.id} className="order-row"><button className={`order-item${o.id === current?.id ? ' active' : ''}${o.id === newId ? ' is-new' : ''}`} aria-current={o.id === current?.id ? 'true' : undefined} onClick={() => select(o.id)}>
                 <span className="oi-top"><strong>{o.customerName || 'ยังไม่มีชื่อลูกค้า'}</strong><span className="oi-amount">{o.total ? `฿${money(o.total)}` : '—'}</span></span>
                 <span className="oi-meta">{o.code} · {o.billNumber || 'ยังไม่มีเลขที่บิล'}</span>
                 <span className="oi-meta">Sales · {o.branch} · {formatReceived(o.receivedAt)}</span>
                 <span className="oi-bottom"><StatusBadge status={o.status} />{bad && isPending(o.status) && <span className="mini-warn"><TriangleAlert size={14} aria-hidden="true" />{o.duplicateOf ? 'อาจซ้ำ' : 'ยอดไม่ตรง'}</span>}{o.id === newId && <span className="new-tag">ใหม่</span>}</span>
-              </button></li>;
+              </button>{isPending(o.status) && <button className="icon-btn danger oi-delete" aria-label={`ลบ ${o.code}`} title="ลบใบนี้ (กรณีดึงมาผิด)" disabled={busy} onClick={() => setDialog({ type: 'delete', id: o.id })}><Trash2 size={16} aria-hidden="true" /></button>}</li>;
             })}
           </ul>
           {loaded && !visible.length && (orders.length === 0
@@ -462,9 +484,19 @@ export default function App() {
     {toast && <div className="toast" role="status"><Check size={18} aria-hidden="true" />{toast}<button aria-label="ปิดข้อความ" onClick={() => setToast('')}><X size={16} /></button></div>}
 
     {dialog && <dialog ref={dialogRef} className={`modal modal-${dialog.type}`} onCancel={() => setDialog(null)} onClick={e => { if (e.target === dialogRef.current) setDialog(null); }} aria-labelledby="modal-title">
-      <div className="modal-header"><h2 id="modal-title">{{ image: `รูปต้นฉบับ · ${current?.code}`, ocr: 'ข้อความ OCR ดิบ', confirm: 'ยืนยันข้อมูลถูกต้อง', upload: 'อัปโหลดใบสั่งซื้อ', reject: 'ปฏิเสธใบนี้', help: 'วิธีใช้งาน' }[dialog.type]}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
+      <div className="modal-header"><h2 id="modal-title">{{ image: `รูปต้นฉบับ · ${current?.code}`, ocr: 'ข้อความ OCR ดิบ', confirm: 'ยืนยันข้อมูลถูกต้อง', upload: 'อัปโหลดใบสั่งซื้อ', reject: 'ปฏิเสธใบนี้', delete: 'ลบใบนี้?', help: 'วิธีใช้งาน' }[dialog.type]}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
       {dialog.type === 'upload' && <UploadForm branches={branches} defaultBranch={branch === 'all' ? branches[0] : branch} ocr={auth.ocr} onDone={onUploaded} />}
       {dialog.type === 'reject' && <RejectForm onSubmit={reason => act('reject', { reason })} />}
+      {dialog.type === 'delete' && (() => { const d = orders.find(x => x.id === dialog.id); return d ? <>
+        <p className="modal-desc">ใช้เมื่อระบบดึงใบมาผิดหรืออัปโหลดผิดรูป ใบและรูปจะถูกลบ แต่ประวัติการกระทำยังอยู่</p>
+        <dl className="confirm">
+          <div><dt>ใบสั่งซื้อ</dt><dd>{d.billNumber || 'ยังไม่มีเลขที่บิล'} ({d.code})</dd></div>
+          <div><dt>ลูกค้า</dt><dd>{d.customerName || 'ยังไม่มีชื่อลูกค้า'}</dd></div>
+          <div><dt>ยอดรวม</dt><dd className="confirm-total">{d.total ? `฿${money(d.total)}` : '—'}</dd></div>
+        </dl>
+        <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" />ลบแล้วกู้คืนไม่ได้ ถ้าเป็นใบจริงแต่ไม่ถูกต้อง ให้ใช้ "ปฏิเสธใบนี้" แทน</div>
+        <div className="modal-actions"><button className="btn outline" onClick={() => setDialog(null)}>ยกเลิก</button><button className="btn danger" disabled={busy} onClick={removeOrder}><Trash2 size={18} aria-hidden="true" />ลบใบนี้</button></div>
+      </> : <p className="modal-desc">ไม่พบใบนี้แล้ว</p>; })()}
       {dialog.type === 'image' && current && <div className="image-viewer"><img src={current.imageUrl} alt="ภาพใบสั่งซื้อขนาดใหญ่" /></div>}
       {dialog.type === 'ocr' && current && <><p className="modal-desc">ข้อความที่ OCR อ่านได้ก่อนแก้ไข แยกจากฟอร์มที่คุณกำลังตรวจ (มีข้อมูลลูกค้า)</p><pre>{current.ocrRaw}</pre></>}
       {dialog.type === 'confirm' && current && <>

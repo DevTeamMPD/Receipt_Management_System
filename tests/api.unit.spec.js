@@ -211,3 +211,28 @@ test('unknown routes and malformed ids do not reach the database', async () => {
   expect((await c.call('PATCH', '/api/orders/not-a-uuid', { version: 1, fields: {} })).status).toBe(404);
   expect(c.sb.calls.length - before).toBeLessThanOrEqual(1); // เหลือแค่การตรวจสิทธิ์ผู้ใช้
 });
+
+test('delete removes a pending order and its image, keeps the audit event, and refuses locked or stale orders', async () => {
+  const c = client();
+  await login(c);
+  const o = (await upload(c)).body.order;
+  const row = c.sb.db.orders.find(x => x.id === o.id);
+  expect((await c.call('DELETE', `/api/orders/${o.id}`, { version: 99 })).body.code).toBe('conflict');
+  const out = await c.call('DELETE', `/api/orders/${o.id}`, { version: o.version });
+  expect(out.status).toBe(200);
+  expect(out.body.code).toBe(o.code);
+  expect(c.sb.db.orders.find(x => x.id === o.id)).toBeUndefined();
+  expect(c.sb.db.items.filter(i => i.order_id === o.id)).toHaveLength(0);
+  expect(c.sb.db.removed).toEqual([row.image_path]);
+  const ev = c.sb.db.events.find(e => e.action === 'deleted');
+  expect(ev.order_id).toBeNull();
+  expect(ev.details).toMatchObject({ code: o.code });
+  expect((await c.call('DELETE', `/api/orders/${o.id}`, { version: 1 })).status).toBe(404);
+
+  const o2 = (await upload(c)).body.order;
+  await c.call('POST', `/api/orders/${o2.id}/reject`, { version: 1, reason: 'ซ้ำ' });
+  const locked = await c.call('DELETE', `/api/orders/${o2.id}`, { version: 2 });
+  expect(locked.status).toBe(409);
+  expect(locked.body.code).toBe('locked');
+  expect(c.sb.db.orders.find(x => x.id === o2.id)).toBeDefined();
+});

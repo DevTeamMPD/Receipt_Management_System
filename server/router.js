@@ -174,6 +174,22 @@ async function transition(ctx) {
   return ok({ order: { id: r.id, status: mapRow(r).status, version: r.version, rejectReason: r.reject_reason || '' } });
 }
 
+// ลบใบที่ดึงมาผิด: ได้เฉพาะใบที่ยังรอตรวจ (ฐานข้อมูลบังคับซ้ำด้วย policy) — บันทึกเหตุการณ์ก่อน แล้วค่อยลบแถวและรูป
+async function deleteOrder(ctx) {
+  const id = asId(ctx.params.id);
+  const version = asVersion(ctx.body?.version);
+  const cur = await ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?select=id,code,bill_number,customer_name,image_path,version,review_status,jst_status&id=eq.${id}&limit=1`);
+  if (!cur?.length) throw new ApiError(404, 'ไม่พบใบนี้');
+  const o = cur[0];
+  if (o.version !== version) throw new ApiError(409, 'ใบนี้ถูกแก้โดยคนอื่นแล้ว กรุณาโหลดใหม่', { code: 'conflict' });
+  if (!['needs_review', 'needs_check'].includes(o.review_status) || o.jst_status !== 'none') throw new ApiError(409, 'ลบได้เฉพาะใบที่ยังรอตรวจ', { code: 'locked' });
+  await logEvent(ctx, id, 'deleted', { code: o.code, bill_number: o.bill_number, customer_name: o.customer_name });
+  const rows = await ctx.db.rest(ctx.auth.token, 'DELETE', `receipt_orders?id=eq.${id}&version=eq.${version}&${PENDING}`, { prefer: 'return=representation' });
+  if (!rows?.length) throw new ApiError(409, 'ใบนี้ถูกแก้หรือเปลี่ยนสถานะไปแล้ว กรุณาโหลดใหม่', { code: 'conflict' });
+  if (o.image_path) { try { await ctx.db.remove(ctx.auth.token, BUCKET, [o.image_path]); } catch (e) { console.error('image cleanup failed', o.image_path, e.code || e.status); } }
+  return ok({ id, code: o.code });
+}
+
 const ROUTES = [
   ['POST', /^\/api\/auth\/login$/, login, { public: true }],
   ['POST', /^\/api\/auth\/logout$/, logout, { public: true }],
@@ -182,6 +198,7 @@ const ROUTES = [
   ['POST', /^\/api\/orders$/, createOrder],
   ['PATCH', /^\/api\/orders\/(?<id>[^/]+)$/, saveOrder],
   ['POST', /^\/api\/orders\/(?<id>[^/]+)\/(?<action>confirm|reject|reopen|jst-done)$/, transition],
+  ['DELETE', /^\/api\/orders\/(?<id>[^/]+)$/, deleteOrder],
 ];
 
 function sameOrigin(headers) {

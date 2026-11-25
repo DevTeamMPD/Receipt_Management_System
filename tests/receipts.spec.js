@@ -128,6 +128,24 @@ test('rejecting needs a reason and ends the order', async ({ page }) => {
   await expect(page.getByLabel('ชื่อลูกค้า')).toHaveAttribute('readonly', '');
 });
 
+test('a wrongly pulled order can be deleted from the list after confirming; locked orders have no delete button', async ({ page }) => {
+  const api = await open(page);
+  await expect(page.locator('.order-list li')).toHaveCount(2);
+  await page.getByRole('button', { name: 'ลบ ' + api.rows.check.code }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', { name: 'ลบใบนี้?' })).toBeVisible();
+  await expect(dialog).toContainText('วิภา ตัวอย่าง');
+  await dialog.getByRole('button', { name: 'ยกเลิก' }).click();
+  await expect(page.locator('.order-list li')).toHaveCount(2);
+  await page.getByRole('button', { name: 'ลบ ' + api.rows.check.code }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'ลบใบนี้' }).click();
+  await expect(page.getByText(`ลบ ${api.rows.check.code} แล้ว`)).toBeVisible();
+  await expect(page.locator('.order-list li')).toHaveCount(1);
+  expect(api.sb.db.orders.find(o => o.id === api.rows.check.id)).toBeUndefined();
+  await page.getByRole('tab', { name: /รอลง JST/ }).click();
+  await expect(page.getByRole('button', { name: 'ลบ ' + api.rows.confirmed.code })).toHaveCount(0);
+});
+
 test('when someone else changed the order, the user is told and can reload', async ({ page }) => {
   const api = await open(page);
   api.sb.db.orders.find(o => o.id === api.rows.todo.id).version += 1; // คนอื่นแก้ไปแล้ว
