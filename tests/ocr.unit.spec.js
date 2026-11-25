@@ -114,8 +114,9 @@ test('runOcr validates the image, picks the provider and never leaks the key or 
   await expect(runOcr({ image: png }, { OCR_PROVIDER: 'nope' }, f)).rejects.toMatchObject({ status: 500 });
 });
 
-test('status reports whether the selected provider has its key, defaulting to demo mode', () => {
-  expect(ocrStatus({})).toMatchObject({ provider: 'mock', demo: true, configured: true });
+test('status reports whether the selected provider has its key; no provider means OCR is off', () => {
+  expect(ocrStatus({})).toMatchObject({ provider: 'none', demo: false, configured: false, known: true });
+  expect(ocrStatus({ OCR_PROVIDER: 'mock' })).toMatchObject({ demo: true, configured: true });
   expect(ocrStatus({ OCR_PROVIDER: 'gemini' })).toMatchObject({ configured: false });
   expect(ocrStatus({ OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'x' })).toMatchObject({ configured: true, demo: false });
 });
@@ -140,4 +141,12 @@ test('Gemini does not retry on errors that retrying cannot fix', async () => {
   const calls = [];
   await expect(geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', OCR_RETRY_DELAY_MS: '0' }, fakeFetch([{ status: 403 }], calls))).rejects.toMatchObject({ status: 502 });
   expect(calls).toHaveLength(1);
+});
+
+test('demo provider is refused unless explicitly allowed, and OCR can be switched off', async () => {
+  await expect(runOcr({ image: png }, { OCR_PROVIDER: 'mock' }, fakeFetch([]))).rejects.toMatchObject({ status: 503, message: expect.stringContaining('สาธิต') });
+  const out = await runOcr({ image: png }, { OCR_PROVIDER: 'mock', OCR_ALLOW_MOCK: '1' }, fakeFetch([]), NOW);
+  expect(out.demo).toBe(true);
+  expect(out.model).toBe('mock');
+  await expect(runOcr({ image: png }, {}, fakeFetch([]))).rejects.toMatchObject({ status: 503 });
 });
