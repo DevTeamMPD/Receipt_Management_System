@@ -1,0 +1,144 @@
+import { test, expect } from '@playwright/test';
+import { createHmac } from 'node:crypto';
+import { branchFromGroupName, verifyLineSignature } from '../server/line.js';
+import { MAX_ATTEMPTS, handleLineWebhook, processDueInbox, resetLineServiceSession } from '../server/lineIngest.js';
+import { handle } from '../server/router.js';
+import { fakeSupabase, URL_, ANON, NOW } from './helpers/fakeSupabase.js';
+
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const SECRET = 'line-secret';
+const ORDER = {
+  docType: 'order_form', billNumber: 'OD-L1', orderDateText: '13 พ.ค. 69', customerName: 'ลูกค้า ไลน์', phone: '0812345678', address: '1 ซอยทดสอบ',
+  subDistrict: 'บางนา', district: 'บางนา', province: 'กรุงเทพมหานคร', postcode: '10260', shipDateText: '', items: [{ product: 'คอกกั้นเด็ก', size: 'L', color: 'ฟ้า' }],
+  remark: '', total: '15,350', posNumber: '', posTotal: '', uncertain: [],
+};
+const env = {
+  SUPABASE_URL: URL_, SUPABASE_ANON_KEY: ANON, OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'k', OCR_RETRY_DELAY_MS: '0',
+  LINE_CHANNEL_SECRET: SECRET, LINE_CHANNEL_ACCESS_TOKEN: 'line-token', LINE_SERVICE_EMAIL: 'staff@example.com', LINE_SERVICE_PASSWORD: 'pw', CRON_SECRET: 'cron-secret',
+};
+
+// Supabase จำลอง + LINE + Gemini จำลอง (gemini = 'order' | 'other' | 'busy')
+function world({ groups = { G1: 'Sales บางนา', G2: 'ทีมขาย' }, gemini = 'order', lineContent = 200 } = {}) {
+  resetLineServiceSession();
+  const sb = fakeSupabase();
+  const state = { gemini, lineCalls: [] };
+  const fetchImpl = async (url, init = {}) => {
+    const u = String(url);
+    if (u.startsWith('https://api-data.line.me/')) {
+      state.lineCalls.push(u);
+      if (lineContent !== 200) return { ok: false, status: lineContent, headers: new Headers(), arrayBuffer: async () => new ArrayBuffer(0) };
+      return { ok: true, status: 200, headers: new Headers({ 'content-type': 'image/jpeg' }), arrayBuffer: async () => PNG };
+    }
+    if (u.startsWith('https://api.line.me/')) {
+      state.lineCalls.push(u);
+      expect(init.headers.authorization).toBe('Bearer line-token');
+      const g = /group\/([^/]+)\/summary/.exec(u);
+      if (g) return { ok: true, status: 200, json: async () => ({ groupName: groups[g[1]] || '' }) };
+      return { ok: true, status: 200, json: async () => ({ displayName: 'แอน (Sales)' }) };
+    }
+    if (u.includes('generativelanguage')) {
+      if (state.gemini === 'busy') return { ok: false, status: 503, json: async () => ({}) };
+      const raw = state.gemini === 'order' ? ORDER : { ...ORDER, docType: 'other' };
+      return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(raw) }] } }] }) };
+    }
+    return sb.fetchImpl(url, init);
+  };
+  return { sb, state, fetchImpl };
+}
+
+const sign = body => createHmac('sha256', SECRET).update(body).digest('base64');
+const imageEvent = (id, groupId = 'G1') => ({ type: 'message', timestamp: NOW.getTime(), source: { type: 'group', groupId, userId: 'U1' }, message: { id, type: 'image', contentProvider: { type: 'line' } } });
+async function post(w, events, { signature, envOver = {} } = {}) {
+  const raw = Buffer.from(JSON.stringify({ destination: 'x', events }));
+  const tasks = [];
+  const out = await handleLineWebhook({ rawBody: raw, headers: { 'x-line-signature': signature ?? sign(raw) }, env: { ...env, ...envOver }, fetchImpl: w.fetchImpl, now: NOW, defer: p => tasks.push(p) });
+  await Promise.all(tasks);
+  return out;
+}
+
+test('signature check uses the raw bytes and the channel secret', () => {
+  const body = Buffer.from('{"events":[]}');
+  expect(verifyLineSignature(body, sign(body), SECRET)).toBe(true);
+  expect(verifyLineSignature(Buffer.from('{"events": []}'), sign(body), SECRET)).toBe(false);
+  expect(verifyLineSignature(body, sign(body), 'other')).toBe(false);
+  expect(verifyLineSignature(body, '', SECRET)).toBe(false);
+});
+
+test('a group maps to a branch only when exactly one branch name is in the group name', () => {
+  const b = ['สยาม', 'ลาดพร้าว', 'บางนา', 'รังสิต'];
+  expect(branchFromGroupName('Sales บางนา', b)).toBe('บางนา');
+  expect(branchFromGroupName('ทีมขาย', b)).toBe(null);
+  expect(branchFromGroupName('สยาม + บางนา', b)).toBe(null);
+});
+
+test('webhook rejects a bad signature and accepts LINE\'s empty verify call', async () => {
+  const w = world();
+  expect((await post(w, [imageEvent('m1')], { signature: 'bad' })).status).toBe(401);
+  expect((await post(w, [])).status).toBe(200);
+  expect(w.sb.db.receipt_line_inbox || []).toHaveLength(0);
+});
+
+test('an order-form photo from a mapped group becomes an order with the LINE sender, once', async () => {
+  const w = world();
+  const out = await post(w, [imageEvent('m1')]);
+  expect(out).toMatchObject({ status: 200, body: { queued: 1 } });
+  const order = w.sb.db.orders[0];
+  expect(order).toMatchObject({ source: 'line', branch: 'บางนา', sender_name: 'แอน (Sales)', customer_name: 'ลูกค้า ไลน์', ocr_status: 'done', order_date: '2026-05-13', image_path: expect.stringMatching(/^line\//) });
+  expect(w.sb.db.receipt_line_inbox[0]).toMatchObject({ status: 'order', order_id: order.id, attempts: 1 });
+  expect(w.sb.db.events.at(-1)).toMatchObject({ action: 'created', details: { source: 'line' } });
+  // LINE ส่ง webhook ซ้ำ → ไม่สร้างใบซ้ำ
+  await post(w, [imageEvent('m1')]);
+  expect(w.sb.db.orders).toHaveLength(1);
+});
+
+test('a photo that is not an order form is dropped and its image deleted', async () => {
+  const w = world({ gemini: 'other' });
+  await post(w, [imageEvent('m2')]);
+  expect(w.sb.db.orders).toHaveLength(0);
+  expect(w.sb.db.receipt_line_inbox[0]).toMatchObject({ status: 'ignored', image_path: null });
+  expect(w.sb.db.removed).toEqual([expect.stringMatching(/^line\//)]);
+});
+
+test('when OCR is busy the photo is retried by cron, and after the last try it still becomes an order', async () => {
+  const w = world({ gemini: 'busy' });
+  await post(w, [imageEvent('m3')]);
+  expect(w.sb.db.receipt_line_inbox[0]).toMatchObject({ status: 'failed', attempts: 1, last_error: expect.stringContaining('ไม่ว่าง') });
+  expect(w.sb.db.orders).toHaveLength(0);
+  const cron = headers => handle({ method: 'GET', path: '/api/cron/line-inbox', headers: { host: 'app.test', ...headers }, env, fetchImpl: w.fetchImpl, now: NOW });
+  expect((await cron({})).status).toBe(401);
+  expect((await cron({ authorization: 'Bearer wrong' })).status).toBe(401);
+  for (let i = 1; i < MAX_ATTEMPTS; i += 1) expect((await cron({ authorization: 'Bearer cron-secret' })).status).toBe(200);
+  expect(w.sb.db.receipt_line_inbox[0]).toMatchObject({ status: 'order', attempts: MAX_ATTEMPTS });
+  expect(w.sb.db.orders[0]).toMatchObject({ source: 'line', ocr_status: 'failed', review_status: 'needs_check' });
+  // ครบแล้วไม่ทำซ้ำ
+  expect((await processDueInbox({ env, fetchImpl: w.fetchImpl, now: NOW })).results).toEqual(['skipped']);
+  expect(w.sb.db.orders).toHaveLength(1);
+});
+
+test('photos from a group not tied to a branch are not taken; joining records the group', async () => {
+  const w = world();
+  await post(w, [{ type: 'join', timestamp: NOW.getTime(), source: { type: 'group', groupId: 'G1' } }, imageEvent('m4', 'G2')]);
+  expect(w.sb.db.receipt_line_groups).toEqual([
+    expect.objectContaining({ group_id: 'G1', group_name: 'Sales บางนา', branch: 'บางนา' }),
+    expect.objectContaining({ group_id: 'G2', group_name: 'ทีมขาย', branch: null }),
+  ]);
+  expect(w.sb.db.receipt_line_inbox || []).toHaveLength(0);
+  expect(w.state.lineCalls.some(u => u.includes('api-data'))).toBe(false);
+  // ไม่ใช่กลุ่ม (แชทส่วนตัว) / ไม่ใช่รูป → ไม่สนใจ
+  await post(w, [{ ...imageEvent('m5'), source: { type: 'user', userId: 'U1' } }, { ...imageEvent('m6'), message: { id: 'm6', type: 'text', text: 'hi' } }]);
+  expect(w.sb.db.receipt_line_inbox || []).toHaveLength(0);
+});
+
+test('an image LINE no longer has is marked failed for good, not retried', async () => {
+  const w = world({ lineContent: 404 });
+  await post(w, [imageEvent('m7')]);
+  expect(w.sb.db.receipt_line_inbox[0]).toMatchObject({ status: 'failed', attempts: MAX_ATTEMPTS, last_error: expect.stringContaining('LINE') });
+  expect(w.sb.db.orders).toHaveLength(0);
+});
+
+test('the dev server routes /api/line/webhook to the LINE handler with the raw body', async ({ request }) => {
+  // dev server ไม่มีคีย์ LINE → 503 จากตัวจัดการ LINE (ไม่ใช่ 415/404 ของ router ปกติ)
+  const res = await request.post('/api/line/webhook', { headers: { 'content-type': 'application/json', 'x-line-signature': 'x' }, data: '{"events":[]}' });
+  expect(res.status()).toBe(503);
+  expect((await request.get('/api/cron/line-inbox')).status()).toBe(401);
+});
