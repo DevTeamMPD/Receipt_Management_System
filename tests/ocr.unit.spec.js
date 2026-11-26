@@ -143,6 +143,36 @@ test('Gemini does not retry on errors that retrying cannot fix', async () => {
   expect(calls).toHaveLength(1);
 });
 
+test('Gemini asks for low thinking by default (fast enough for extraction) and drops it if the model rejects it', async () => {
+  const ok = { json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } };
+  const cfg = call => JSON.parse(call.init.body).generationConfig;
+  let calls = [];
+  await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k' }, fakeFetch([ok], calls));
+  expect(cfg(calls[0]).thinkingConfig).toEqual({ thinkingLevel: 'low' });
+  calls = [];
+  await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', GEMINI_THINKING_LEVEL: 'default' }, fakeFetch([ok], calls));
+  expect(cfg(calls[0]).thinkingConfig).toBeUndefined();
+  calls = [];
+  const out = await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k' }, fakeFetch([{ status: 400 }, ok], calls));
+  expect(out.raw.billNumber).toBe('OD-1');
+  expect(calls).toHaveLength(2);
+  expect(cfg(calls[1]).thinkingConfig).toBeUndefined();
+  calls = [];
+  await expect(geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k' }, fakeFetch([{ status: 400 }, { status: 400 }], calls))).rejects.toMatchObject({ status: 502 });
+  expect(calls).toHaveLength(2);
+});
+
+test('without OCR_TIMEOUT_MS one Gemini call may use the whole budget (real reads take 25–35s, more than the old 20s cap)', async () => {
+  const ok = { json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } };
+  const slowOk = (url, init) => new Promise((resolve, reject) => {
+    const t = setTimeout(() => resolve({ ok: true, status: 200, json: async () => ok.json }), 300);
+    init.signal.addEventListener('abort', () => { clearTimeout(t); reject(init.signal.reason); });
+  });
+  const out = await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', OCR_BUDGET_MS: '2000' }, slowOk);
+  expect(out.raw.billNumber).toBe('OD-1');
+  await expect(geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', OCR_BUDGET_MS: '2000', OCR_TIMEOUT_MS: '100' }, slowOk)).rejects.toMatchObject({ status: 504 });
+});
+
 test('Gemini gives up within the time budget instead of hanging past the Vercel limit; the request carries an abort signal', async () => {
   const hang = calls => (url, init) => new Promise((_, reject) => { calls.push({ url }); init.signal.addEventListener('abort', () => reject(init.signal.reason)); });
   let calls = [];

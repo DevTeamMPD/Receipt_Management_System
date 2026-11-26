@@ -35,11 +35,13 @@ export async function mockProvider({ base64 }) {
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // งบเวลา: Vercel ตัดฟังก์ชันที่ 60 วินาที จึงต้องเลิกรอโมเดลก่อนถึงตอนนั้น แล้วเก็บรูปไว้ให้คนกรอกเอง
-// OCR_TIMEOUT_MS = รอต่อหนึ่งคำขอ (ค่าเริ่มต้น 20 วิ), OCR_BUDGET_MS = รวมทุกคำขอ/ทุกรุ่น (ค่าเริ่มต้น 40 วิ)
+// OCR_BUDGET_MS = รวมทุกคำขอ/ทุกรุ่น (ค่าเริ่มต้น 48 วิ — เหลือเวลาให้บันทึกรูปและข้อมูล)
+// OCR_TIMEOUT_MS = เพดานต่อหนึ่งคำขอ (ค่าเริ่มต้น = ทั้งงบ) Gemini อ่านใบจริงใช้ราว 25–35 วิ ตัดที่ 20 วิจะไม่มีวันสำเร็จ
 const slowMessage = provider => `${provider} ตอบช้าเกินไป เก็บรูปไว้แล้ว กรอกข้อมูลจากรูปเอง หรือลองใหม่ภายหลัง`;
 function budget(env) {
-  const perCall = Number(env.OCR_TIMEOUT_MS ?? 20_000);
-  const deadline = Date.now() + Number(env.OCR_BUDGET_MS ?? 40_000);
+  const total = Number(env.OCR_BUDGET_MS ?? 48_000);
+  const perCall = Number(env.OCR_TIMEOUT_MS ?? total);
+  const deadline = Date.now() + total;
   return {
     signal(provider) {
       const left = deadline - Date.now();
@@ -57,20 +59,37 @@ async function fetchWithin(fetchImpl, provider, b, url, init) {
   }
 }
 
+// การ "คิด" ของ Gemini 3 กินเวลาส่วนใหญ่ แต่งานดึงข้อมูลจากใบไม่ต้องคิดลึก จึงตั้ง low เป็นค่าเริ่มต้น
+// GEMINI_THINKING_LEVEL = minimal | low | medium | high | default (default = ไม่ส่ง ใช้ค่าของรุ่น)
+function thinkingConfig(env) {
+  const level = String(env.GEMINI_THINKING_LEVEL || 'low').trim().toLowerCase();
+  return level === 'default' ? null : { thinkingLevel: level };
+}
+
 // เรียกครั้งเดียวต่อหนึ่งรุ่น; ถ้า Google ตอบ 503 (ผู้ใช้หนาแน่น) หรือ 500 ลองใหม่สูงสุด 3 ครั้งแบบหน่วงเวลา
+// ถ้ารุ่นไม่รองรับการตั้งระดับการคิด (400) ลองใหม่หนึ่งครั้งโดยไม่ส่งค่านั้น
 async function geminiCall(model, { base64, mime }, env, fetchImpl, b) {
   const delays = [Number(env.OCR_RETRY_DELAY_MS ?? 1000), Number(env.OCR_RETRY_DELAY_MS ?? 1000) * 2.5];
+  let thinking = thinkingConfig(env);
   for (let attempt = 0; ; attempt += 1) {
+    const t0 = Date.now();
     const res = await fetchWithin(fetchImpl, 'Gemini', b, `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
       body: JSON.stringify({
         contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: mime, data: base64 } }] }],
         // ไม่ส่ง temperature เป็นค่าเริ่มต้น (รุ่น Gemini 3 ขึ้นไปแนะนำให้ใช้ค่ามาตรฐาน) ตั้ง GEMINI_TEMPERATURE ได้ถ้าต้องการ
-        generationConfig: { responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA, ...(env.GEMINI_TEMPERATURE ? { temperature: Number(env.GEMINI_TEMPERATURE) } : {}) },
+        generationConfig: {
+          responseMimeType: 'application/json', responseSchema: GEMINI_SCHEMA,
+          ...(env.GEMINI_TEMPERATURE ? { temperature: Number(env.GEMINI_TEMPERATURE) } : {}),
+          ...(thinking ? { thinkingConfig: thinking } : {}),
+        },
       }),
-    });
+    }).catch(e => { console.warn('ocr gemini', JSON.stringify({ model, ms: Date.now() - t0, error: e.status })); throw e; });
+    // บันทึกเฉพาะรุ่น/สถานะ/เวลา (ไม่มีข้อมูลลูกค้า) ไว้ดูใน Vercel logs ว่าช้าหรือล้มที่ขั้นไหน
+    console.info('ocr gemini', JSON.stringify({ model, status: res.status, ms: Date.now() - t0, thinking: thinking?.thinkingLevel || 'default' }));
     if (res.ok) return res;
+    if (res.status === 400 && thinking) { thinking = null; continue; }
     if ((res.status === 503 || res.status === 500) && attempt < delays.length && b.hasTimeFor(delays[attempt])) { await sleep(delays[attempt]); continue; }
     throw httpError('Gemini', res.status);
   }
