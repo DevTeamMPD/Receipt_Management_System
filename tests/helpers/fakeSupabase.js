@@ -20,6 +20,7 @@ export function fakeSupabase() {
   const matches = (row, params) => [...params].every(([k, v]) => {
     if (['select', 'order', 'limit', 'receipt_order_items.order'].includes(k) || !(k in row)) return true;
     if (v.startsWith('eq.')) return String(row[k]) === v.slice(3);
+    if (v.startsWith('neq.')) return String(row[k]) !== v.slice(4);
     if (v.startsWith('in.(')) return v.slice(4, -1).split(',').includes(String(row[k]));
     return true;
   });
@@ -91,9 +92,16 @@ export function fakeSupabase() {
       if (!usr?.allowed) return res(403, {});
       db.removed = (db.removed || []).concat(body.prefixes); return res(200, []);
     }
+    if (u.pathname.startsWith('/storage/v1/object/authenticated/receipt-images/')) {
+      if (!usr?.allowed) return res(403, {});
+      const bytes = db.blobs?.[u.pathname.replace('/storage/v1/object/authenticated/receipt-images/', '')];
+      return bytes ? { ok: true, status: 200, arrayBuffer: async () => bytes } : res(404, {});
+    }
     if (u.pathname.startsWith('/storage/v1/object/receipt-images/')) {
       if (!usr?.allowed) return res(403, {});
-      db.files.push(u.pathname); return res(200, {});
+      db.files.push(u.pathname);
+      db.blobs = { ...(db.blobs || {}), [u.pathname.replace('/storage/v1/object/receipt-images/', '')]: init.body };
+      return res(200, {});
     }
     return res(404, {});
   };

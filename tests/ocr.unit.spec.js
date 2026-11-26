@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { parseDateText, parseAmount, parsePhone, normalizeExtraction } from '../server/ocr/normalize.js';
-import { geminiProvider, typhoonProvider, parseJsonLoose, OcrError } from '../server/ocr/providers.js';
+import { geminiModels, geminiProvider, typhoonProvider, parseJsonLoose, OcrError } from '../server/ocr/providers.js';
 import { runOcr, ocrStatus } from '../server/ocr/handler.js';
 
 const NOW = new Date('2026-11-25T00:00:00Z');
@@ -18,6 +18,13 @@ const fakeFetch = (responses, calls = []) => async (url, init) => {
 
 test('dates: Buddhist short/long years, Thai digits, impossible and implausible dates', () => {
   expect(parseDateText('14/7/69', NOW)).toBe('2026-07-14');
+  // ชื่อเดือนไทย (เคสจริง: โมเดลคืน "13, พ.ค. 69" แล้วช่องวันที่ว่าง)
+  expect(parseDateText('13, พ.ค. 69', NOW)).toBe('2026-05-13');
+  expect(parseDateText('13 พ.ค. 69', NOW)).toBe('2026-05-13');
+  expect(parseDateText('13/พ.ค./69', NOW)).toBe('2026-05-13');
+  expect(parseDateText('1 มกราคม 2569', NOW)).toBe('2026-01-01');
+  expect(parseDateText('3 ธค 68', NOW)).toBe('2025-12-03');
+  expect(parseDateText('13 ไม่ใช่เดือน 69', NOW)).toBe('');
   expect(parseDateText('24/11/2569', NOW)).toBe('2026-11-24');
   expect(parseDateText('๒๔/๑๑/๖๙', NOW)).toBe('2026-11-24');
   expect(parseDateText('2026-11-24', NOW)).toBe('2026-11-24');
@@ -75,7 +82,7 @@ test('Gemini default model is current and temperature is only sent when configur
   const calls = [];
   const ok = () => ({ json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } });
   await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k' }, fakeFetch([ok()], calls));
-  expect(calls[0].url).toContain('/models/gemini-3.8-flash:generateContent');
+  expect(calls[0].url).toContain('/models/gemini-flash-lite-latest:generateContent');
   await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', GEMINI_TEMPERATURE: '0.2' }, fakeFetch([ok()], calls));
   expect(calls[1].body.generationConfig.temperature).toBe(0.2);
 });
@@ -121,20 +128,44 @@ test('status reports whether the selected provider has its key; no provider mean
   expect(ocrStatus({ OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'x' })).toMatchObject({ configured: true, demo: false });
 });
 
-test('Gemini retries when the model is busy (503), then falls back to the backup model', async () => {
+test('Gemini skips a busy/missing model to the next one right away, and gives the busy pass one more try', async () => {
   const ok = { json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } };
   const env = { GEMINI_API_KEY: 'k', OCR_RETRY_DELAY_MS: '0' };
   let calls = [];
-  const out = await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, env, fakeFetch([{ status: 503 }, { status: 503 }, ok], calls));
+  // รุ่นเดียว: ไม่ว่าง → รออีกรอบ → สำเร็จ
+  let out = await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, env, fakeFetch([{ status: 503 }, ok], calls));
   expect(out.raw.billNumber).toBe('OD-1');
-  expect(calls).toHaveLength(3);
+  expect(calls).toHaveLength(2);
+  // ไม่ว่างทั้งสองรอบ → ข้อความบอกว่าไม่ว่าง (ไม่ใช่ "ตอบช้า")
   calls = [];
-  await expect(geminiProvider({ base64: 'QUJD', mime: 'image/png' }, env, fakeFetch([{ status: 503 }, { status: 503 }, { status: 503 }], calls))).rejects.toMatchObject({ status: 503, message: expect.stringContaining('หนาแน่น') });
-  expect(calls).toHaveLength(3);
-  calls = [];
-  await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { ...env, GEMINI_FALLBACK_MODEL: 'backup-m' }, fakeFetch([{ status: 503 }, { status: 503 }, { status: 503 }, ok], calls));
-  expect(calls).toHaveLength(4);
-  expect(calls[3].url).toContain('/models/backup-m:generateContent');
+  await expect(geminiProvider({ base64: 'QUJD', mime: 'image/png' }, env, fakeFetch([{ status: 503 }, { status: 503 }], calls))).rejects.toMatchObject({ status: 503, message: expect.stringContaining('ไม่ว่าง') });
+  expect(calls).toHaveLength(2);
+  // หลายรุ่น: รุ่นแรกไม่ว่าง/ไม่มี → ไปรุ่นถัดไปทันที ไม่ลองรุ่นเดิมซ้ำ · ผลบอกรุ่นที่ตอบจริง
+  for (const first of [503, 404, 429]) {
+    calls = [];
+    out = await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { ...env, GEMINI_MODELS: 'big-m, lite-m' }, fakeFetch([{ status: first }, ok], calls));
+    expect(calls.map(c => c.url.match(/models\/([^:]+)/)[1])).toEqual(['big-m', 'lite-m']);
+    expect(out.model).toBe('lite-m');
+  }
+  // ไม่ตั้ง GEMINI_MODELS = GEMINI_MODEL แล้ว GEMINI_FALLBACK_MODEL (ไม่ซ้ำ)
+  expect(geminiModels({ GEMINI_MODEL: 'a', GEMINI_FALLBACK_MODEL: 'b' })).toEqual(['a', 'b']);
+  expect(geminiModels({ GEMINI_MODEL: 'a', GEMINI_FALLBACK_MODEL: 'a' })).toEqual(['a']);
+  expect(geminiModels({ GEMINI_MODELS: ' x , y ,,x', GEMINI_MODEL: 'a' })).toEqual(['x', 'y']);
+  expect(geminiModels({})).toEqual(['gemini-flash-lite-latest']);
+});
+
+test('a slow first model is cut off early enough that the backup still gets its turn', async () => {
+  const ok = { json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } };
+  const seen = [];
+  const f = (url, init) => {
+    seen.push(url);
+    if (url.includes('slow-m')) return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+    return Promise.resolve({ ok: true, status: 200, json: async () => ok.json });
+  };
+  const t0 = Date.now();
+  const out = await geminiProvider({ base64: 'QUJD', mime: 'image/png' }, { GEMINI_API_KEY: 'k', GEMINI_MODELS: 'slow-m,lite-m', OCR_BUDGET_MS: '2500', OCR_FALLBACK_RESERVE_MS: '1500' }, f);
+  expect(out.model).toBe('lite-m');
+  expect(Date.now() - t0).toBeLessThan(2000);
 });
 
 test('Gemini does not retry on errors that retrying cannot fix', async () => {
@@ -204,6 +235,48 @@ test('an OCR timeout still saves the order with the photo and reports the reason
   expect(out.body.order.ocrStatus).toBe('failed');
   expect(out.body.ocrError).toContain('ช้าเกินไป');
   expect(sb.db.runs[0]).toMatchObject({ ok: false, http_status: 504 });
+});
+
+test('retry OCR fills only the blank fields of a failed order, keeps what staff typed, and logs the run', async () => {
+  const { handle } = await import('../server/router.js');
+  const { fakeSupabase, URL_, ANON, NOW: now } = await import('./helpers/fakeSupabase.js');
+  const sb = fakeSupabase();
+  let geminiUp = false;
+  const ok = { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] };
+  const f = async (url, init) => {
+    if (String(url).includes('generativelanguage')) return geminiUp ? { ok: true, status: 200, json: async () => ok } : { ok: false, status: 503, json: async () => ({}) };
+    return sb.fetchImpl(url, init);
+  };
+  const env = { SUPABASE_URL: URL_, SUPABASE_ANON_KEY: ANON, OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'k', OCR_RETRY_DELAY_MS: '0' };
+  const headers = { 'content-type': 'application/json', host: 'app.test' };
+  const login = await handle({ method: 'POST', path: '/api/auth/login', headers, body: { email: 'staff@example.com', password: 'pw' }, env, fetchImpl: f, now });
+  const h = { ...headers, cookie: login.cookies[0].split(';')[0] };
+  const call = (method, path, body) => handle({ method, path, headers: h, body, env, fetchImpl: f, now });
+
+  const created = await call('POST', '/api/orders', { image: png, branch: 'สยาม' });
+  expect(created.body.order.ocrStatus).toBe('failed');
+  expect(created.body.ocrError).toContain('ไม่ว่าง');
+  const id = created.body.order.id;
+  const saved = await call('PATCH', `/api/orders/${id}`, { version: created.body.order.version, fields: { customerName: 'พิมพ์เอง' } });
+
+  // Gemini ยังไม่ว่าง → บอกเหตุผล ใบไม่เปลี่ยน
+  let r = await call('POST', `/api/orders/${id}/ocr`, { version: saved.body.version });
+  expect(r.status).toBe(200);
+  expect(r.body.ocrError).toContain('ไม่ว่าง');
+  expect(r.body.order.ocrStatus).toBe('failed');
+
+  geminiUp = true;
+  r = await call('POST', `/api/orders/${id}/ocr`, { version: saved.body.version });
+  expect(r.status).toBe(200);
+  expect(r.body.ocrError).toBe('');
+  expect(r.body.order).toMatchObject({ ocrStatus: 'done', customerName: 'พิมพ์เอง', billNumber: good.billNumber, phone: '0812345678' });
+  expect(r.body.order.items.length).toBe(good.items.length);
+  expect(sb.db.runs.map(x => x.ok)).toEqual([false, false, true]);
+  expect(sb.db.events.filter(e => e.action === 'ocr_retried').map(e => e.details.ok)).toEqual([false, true]);
+
+  // อ่านสำเร็จแล้วกดซ้ำไม่ได้ · เวอร์ชันเก่าถูกปฏิเสธ
+  expect((await call('POST', `/api/orders/${id}/ocr`, { version: r.body.order.version })).status).toBe(409);
+  expect((await call('POST', `/api/orders/${id}/ocr`, { version: 1 })).status).toBe(409);
 });
 
 test('demo provider is refused unless explicitly allowed, and OCR can be switched off', async () => {

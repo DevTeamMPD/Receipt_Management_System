@@ -222,6 +222,21 @@ test('uploading a photo creates an order with the photo, OCR result and highligh
   await expect(page.locator('.order-list li')).toHaveCount(3);
 });
 
+test('a failed read can be retried from the banner and only fills the blank fields', async ({ page }) => {
+  const { makeRow } = await import('./helpers/fakeSupabase.js');
+  const api = await installApi(page, { seed: false });
+  const row = makeRow({ ocr_status: 'failed', review_status: 'needs_check', image_path: 'img/retry.png', bill_number: '', total: null, customer_name: 'พิมพ์ไว้แล้ว', phone: '', address: '', sub_district: '', district: '', province: '', postcode: '', order_date: null, ocr_confidence: null, ocr_raw_text: null });
+  api.sb.db.orders.push(row);
+  api.sb.db.blobs = { 'img/retry.png': PNG };
+  await page.goto('/');
+  await expect(page.getByText('อ่านรูปอัตโนมัติไม่สำเร็จ')).toBeVisible();
+  await page.getByRole('button', { name: 'อ่านรูปใหม่' }).click();
+  await expect(page.getByText('อ่านรูปอัตโนมัติไม่สำเร็จ')).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: /อ่านรูป RCP-\d+ แล้ว/ })).toBeVisible();
+  await expect(page.getByLabel('ชื่อลูกค้า')).toHaveValue('พิมพ์ไว้แล้ว');
+  await expect(page.getByLabel('เลขที่บิล')).not.toHaveValue('');
+});
+
 test('uploading without OCR configured keeps the photo and asks for manual entry', async ({ page }) => {
   const api = await open(page, { env: { OCR_PROVIDER: '' } });
   await page.getByRole('button', { name: 'อัปโหลดใบสั่งซื้อ' }).click();

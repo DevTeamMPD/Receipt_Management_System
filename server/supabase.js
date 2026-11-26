@@ -59,6 +59,11 @@ export function supabase(env, fetchImpl = fetch) {
       const res = await fetchImpl(`${url}/storage/v1/object/${bucket}/${path}`, { method: 'POST', headers: { ...baseHeaders(token), 'content-type': contentType, 'x-upsert': 'false' }, body: bytes });
       if (!res.ok) throw new ApiError(502, 'บันทึกรูปไม่สำเร็จ', { code: `storage_${res.status}` });
     },
+    async download(token, bucket, path) {
+      const res = await fetchImpl(`${url}/storage/v1/object/authenticated/${bucket}/${path}`, { headers: baseHeaders(token) });
+      if (!res.ok) throw new ApiError(502, 'โหลดรูปไม่สำเร็จ', { code: `storage_${res.status}` });
+      return Buffer.from(await res.arrayBuffer());
+    },
     async remove(token, bucket, paths) {
       if (!paths.length) return;
       const res = await fetchImpl(`${url}/storage/v1/object/${bucket}`, { method: 'DELETE', headers: { ...baseHeaders(token), 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: paths }) });

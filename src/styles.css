@@ -175,6 +175,8 @@ legend { font-weight: 600; font-size: 17px; padding: 0 8px; color: var(--primary
 .banner.info { background: var(--ok-bg); border: 1px solid #a9d6bc; color: var(--ok); align-items: center; }
 .banner svg { margin-top: 3px; }
 .banner.info svg { margin-top: 0; }
+.banner .retry-ocr { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; min-height: 40px; }
+.banner .retry-ocr svg { margin-top: 0; }
 
 /* แถบปุ่มล่าง */
 .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 24px; background: var(--surface); border-top: 1px solid var(--line); }

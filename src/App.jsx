@@ -290,6 +290,24 @@ export default function App() {
       : order.ocrStatus === 'skipped' ? 'เก็บรูปแล้ว — กรอกข้อมูลจากรูปได้เลย'
         : `อ่านใบสั่งซื้อแล้ว ตรวจช่องสีเหลืองก่อนยืนยัน${order.duplicateOf ? ` · อาจซ้ำกับ ${order.duplicateOf}` : ''}`);
   }
+  // อ่านรูปใหม่ให้ใบที่ OCR ล้มเหลว — บันทึกที่ค้างอยู่ให้เสร็จก่อน เซิร์ฟเวอร์เติมเฉพาะช่องที่ยังว่าง
+  async function retryOcr() {
+    const o = current;
+    if (!o || busy) return;
+    setBusy(true);
+    try {
+      if (pending.current[o.id] || inflight.current[o.id]) { await flush(o.id); }
+      if (saves[o.id]?.state === 'conflict' || pending.current[o.id]) { setToast('บันทึกการแก้ไขล่าสุดไม่สำเร็จ ตรวจข้อความด้านล่างก่อน'); return; }
+      const fresh = ordersRef.current.find(x => x.id === o.id);
+      const r = await api.retryOcr(o.id, fresh.version);
+      mutate(os => os.map(x => (x.id === o.id ? { ...x, ...r.order, imageUrl: r.order.imageUrl || x.imageUrl } : x)));
+      setToast(r.ocrError ? `ยังอ่านไม่สำเร็จ: ${r.ocrError}` : `อ่านรูป ${o.code} แล้ว ตรวจช่องสีเหลืองก่อนยืนยัน${r.order.duplicateOf ? ` · อาจซ้ำกับ ${r.order.duplicateOf}` : ''}`);
+    } catch (e) {
+      if (handleAuthError(e)) return;
+      setToast(e.message);
+      if (e.code === 'conflict') setSave(o.id, 'conflict', e.message);
+    } finally { setBusy(false); }
+  }
   // ลบใบที่ดึงมาผิด (เฉพาะใบที่ยังรอตรวจ) — ให้ API/ฐานข้อมูลเป็นผู้ตัดสิน แล้วค่อยเอาออกจากรายการ
   async function removeOrder() {
     const id = dialog?.id;
@@ -404,8 +422,16 @@ export default function App() {
                   {current.status === 'confirmed' && <div className="banner info"><Check size={18} aria-hidden="true" />ยืนยันข้อมูลแล้ว — รอลงใน JST (ยังไม่ได้เชื่อมบอท: ลงใน JST เอง แล้วกด "ทำเครื่องหมายว่าลง JST แล้ว")</div>}
                   {current.status === 'done' && <div className="banner info"><Check size={18} aria-hidden="true" />ทำเครื่องหมายว่าลงใน JST แล้ว</div>}
                   {current.status === 'rejected' && <div className="banner bad"><TriangleAlert size={18} aria-hidden="true" />ปฏิเสธใบนี้แล้ว: {current.rejectReason}</div>}
-                  {current.ocrStatus === 'failed' && isPending(current.status) && <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" /><div><strong>อ่านรูปอัตโนมัติไม่สำเร็จ</strong><br />กรอกข้อมูลจากรูปด้วยตนเอง</div></div>}
-                  {current.ocrStatus === 'skipped' && isPending(current.status) && <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" /><div><strong>ใบนี้ไม่ได้ผ่าน OCR</strong><br />กรอกข้อมูลจากรูปด้วยตนเอง</div></div>}
+                  {(current.ocrStatus === 'failed' || current.ocrStatus === 'skipped') && isPending(current.status) && (
+                    <div className="banner warn">
+                      <TriangleAlert size={18} aria-hidden="true" />
+                      <div className="banner-body">
+                        <strong>{current.ocrStatus === 'failed' ? 'อ่านรูปอัตโนมัติไม่สำเร็จ' : 'ใบนี้ไม่ได้ผ่าน OCR'}</strong><br />
+                        {auth.ocr?.configured ? 'กดอ่านรูปใหม่ หรือกรอกข้อมูลจากรูปด้วยตนเอง (อ่านใหม่จะเติมเฉพาะช่องที่ยังว่าง)' : 'กรอกข้อมูลจากรูปด้วยตนเอง'}
+                        {auth.ocr?.configured && <button type="button" className="btn outline retry-ocr" disabled={busy} onClick={retryOcr}><RefreshCw size={16} aria-hidden="true" />{busy ? 'กำลังอ่านรูป…' : 'อ่านรูปใหม่'}</button>}
+                      </div>
+                    </div>
+                  )}
                   {current.ocrProvider === 'mock' && <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" /><div><strong>ข้อมูลจากโหมดสาธิต</strong><br />ไม่ได้อ่านจากรูปนี้จริง</div></div>}
                   {current.duplicateOf && isPending(current.status) && <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" /><div><strong>อาจเป็นใบซ้ำ</strong><br />เลขที่บิลและยอดตรงกับ {current.duplicateOf} — ตรวจก่อนยืนยัน</div></div>}
                   {isPending(current.status) && warn.map(w => <div className="banner warn" key={w.key}><TriangleAlert size={18} aria-hidden="true" /><div><strong>ยอดไม่ตรงกับใบเสร็จ</strong><br />ใบสั่งซื้อ ฿{money(current.total)} · ใบเสร็จ ฿{money(current.posTotal)} · ต่างกัน ฿{money(Math.abs(w.diff))} (อาจเป็นส่วนลด) — ตรวจแล้วจึงยืนยันได้</div></div>)}
