@@ -69,6 +69,27 @@ export function fakeSupabase() {
           return res(200, hit);
         }
       }
+      const KEYS = { receipt_line_groups: 'group_id', receipt_line_inbox: 'message_id' };
+      if (KEYS[t]) {
+        const rows = (db[t] ||= []);
+        if (method === 'GET') return res(200, rows.filter(r => matches(r, u.searchParams)));
+        if (method === 'POST') {
+          const out = [];
+          for (const r of [].concat(body)) {
+            if (rows.some(x => x[KEYS[t]] === r[KEYS[t]])) continue;
+            const row = t === 'receipt_line_inbox'
+              ? { id: `10000000-0000-4000-8000-${String(rows.length + 1).padStart(12, '0')}`, status: 'pending', attempts: 0, image_path: null, sender_name: null, order_id: null, last_error: null, created_at: NOW.toISOString(), updated_at: NOW.toISOString(), ...r }
+              : { active: true, branch: null, group_name: '', ...r };
+            rows.push(row); out.push(row);
+          }
+          return res(201, out);
+        }
+        if (method === 'PATCH') {
+          const hit = rows.filter(r => matches(r, u.searchParams));
+          hit.forEach(r => Object.assign(r, body, { updated_at: NOW.toISOString() }));
+          return res(200, hit);
+        }
+      }
       if (t === 'receipt_order_items' && method === 'POST') { db.items.push(...[].concat(body)); return res(201, null); }
       if (t === 'receipt_events') {
         if (method === 'POST') { db.events.push({ ...body, created_at: NOW.toISOString() }); return res(201, null); }

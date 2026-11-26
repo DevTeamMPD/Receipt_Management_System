@@ -66,7 +66,7 @@ export function mapRow(r, imageUrl = '', codeById = {}) {
     address: r.address || '', subDistrict: r.sub_district || '', district: r.district || '', province: r.province || '', postcode: r.postcode || '',
     shipDate: r.ship_date || '', remark: r.remark || '', total: num(r.total), posNumber: r.pos_number || '', posTotal: num(r.pos_total),
     items: (r.receipt_order_items || []).slice().sort((a, b) => a.position - b.position).map(i => ({ product: i.product, size: i.size, color: i.color })),
-    branch: r.branch, sender: r.sender_name || '', receivedAt: r.received_at, confidence: r.ocr_confidence, uncertain: r.ocr_uncertain || [],
+    branch: r.branch, source: r.source || 'upload', sender: r.sender_name || '', receivedAt: r.received_at, confidence: r.ocr_confidence, uncertain: r.ocr_uncertain || [],
     ocrProvider: r.ocr_provider || '', ocrStatus: r.ocr_status, ocrRaw: r.ocr_raw_text || '', ocrOriginal: r.ocr_original || null,
     duplicateOf: (r.duplicate_of && codeById[r.duplicate_of]) || '', rejectReason: r.reject_reason || '', status: statusOf(r), version: r.version, imageUrl,
   };

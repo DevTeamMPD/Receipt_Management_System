@@ -399,7 +399,7 @@ export default function App() {
               <button className="btn ghost back" onClick={() => setMobileView('list')}><ArrowLeft size={18} aria-hidden="true" />กลับไปรายการ</button>
               <div className="dh-title">
                 <h1>ใบสั่งซื้อ <span className="nowrap">{current.billNumber || current.code}</span></h1>
-                <p><span>{current.code}</span><span><MessageCircle size={14} aria-hidden="true" /> Sales {current.branch}</span><span>ผู้อัปโหลด {current.sender}</span><span>{formatReceived(current.receivedAt)} น.</span>
+                <p><span>{current.code}</span><span><MessageCircle size={14} aria-hidden="true" /> Sales {current.branch}</span><span>{current.source === 'line' ? `ส่งทาง LINE โดย ${current.sender}` : `ผู้อัปโหลด ${current.sender}`}</span><span>{formatReceived(current.receivedAt)} น.</span>
                   <span className={current.confidence != null && current.confidence < 80 ? 'ocr low' : 'ocr'}>{current.confidence == null ? 'ไม่ได้ใช้ OCR' : `OCR ${current.confidence}% (${current.ocrProvider === 'mock' ? 'สาธิต' : 'ประเมินจากกฎตรวจ'})`}</span></p>
               </div>
               <StatusBadge status={current.status} />

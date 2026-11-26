@@ -1,13 +1,12 @@
-import { randomUUID } from 'node:crypto';
 import { ApiError, supabase } from './supabase.js';
 import { COOKIE, parseCookies, decodeSession, tokenExpiry, setCookie, clearCookie } from './session.js';
-import { ocrStatus, parseImageDataUrl, runOcr } from './ocr/handler.js';
-import { OcrError } from './ocr/providers.js';
+import { ocrStatus, parseImageDataUrl } from './ocr/handler.js';
 import { ORDER_SELECT, branchesFrom, mapRow, sanitizeItems, sanitizePatch } from './orders.js';
+import { BUCKET, OCR_FIELD_KEYS, dupCodeOf, findDuplicate, insertOrder, logEvent, logOcrRun, needsCheckFor, ocrDataColumns, readImage } from './orderCreate.js';
 import { validate } from '../src/validation.js';
+import { timingSafeEqual } from 'node:crypto';
+import { processDueInbox } from './lineIngest.js';
 
-const BUCKET = 'receipt-images';
-const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const EDIT_LOG_WINDOW_MS = 5 * 60 * 1000;
 const PENDING = 'review_status=in.(needs_review,needs_check)&jst_status=eq.none';
 const CONFIRMED = 'review_status=eq.confirmed&jst_status=eq.none';
@@ -15,12 +14,6 @@ const CONFIRMED = 'review_status=eq.confirmed&jst_status=eq.none';
 const ok = (body, status = 200) => ({ status, body });
 const asVersion = v => { if (!Number.isInteger(v) || v < 1) throw new ApiError(422, 'ไม่พบเลขเวอร์ชันของใบ กรุณาโหลดใหม่'); return v; };
 const asId = id => { if (!/^[0-9a-f-]{36}$/i.test(id)) throw new ApiError(404, 'ไม่พบใบนี้'); return id; };
-
-async function logEvent(ctx, orderId, action, details = {}) {
-  try {
-    await ctx.db.rest(ctx.auth.token, 'POST', 'receipt_events', { body: { order_id: orderId, actor: ctx.auth.user.id, actor_label: ctx.auth.user.email, action, details } });
-  } catch (e) { console.error('audit log failed', action, e.code || e.status); }
-}
 
 async function authenticate(ctx) {
   let sess = decodeSession(parseCookies(ctx.req.headers.cookie)[COOKIE]);
@@ -73,72 +66,15 @@ async function listOrders(ctx) {
   return ok({ orders: rows.map(r => mapRow(r, urls[r.image_path] || '', codeById)) });
 }
 
-// ช่องข้อมูลจากผล OCR (ใช้ทั้งตอนอัปโหลดและตอนกดอ่านรูปใหม่) — x = null คือไม่มีผล OCR
-function ocrDataColumns(x) {
-  return {
-    bill_number: x?.billNumber || '', order_date: x?.orderDate || null, total: x?.total ? Number(x.total) : null,
-    customer_name: x?.customerName || '', phone: x?.phone || '', address: x?.address || '', sub_district: x?.subDistrict || '',
-    district: x?.district || '', province: x?.province || '', postcode: x?.postcode || '', ship_date: x?.shipDate || null, remark: x?.remark || '',
-    pos_number: x?.posNumber || '', pos_total: x?.posTotal ? Number(x.posTotal) : null,
-  };
-}
-const OCR_FIELD_KEYS = ['billNumber', 'orderDate', 'customerName', 'phone', 'address', 'subDistrict', 'district', 'province', 'postcode', 'shipDate', 'remark', 'total', 'posNumber', 'posTotal', 'items'];
-const needsCheckFor = (x, dupId) => x.uncertain.length > 0 || x.confidence < 80 || x.docType !== 'order_form' || !!dupId;
-
-// อ่านรูปด้วย OCR พร้อมเก็บสถิติ (ไม่โยน error — ล้มเหลวคืน ocrError ให้คนกรอกเอง)
-async function readImage(ctx, image) {
-  const t0 = Date.now();
-  try { return { x: await runOcr({ image }, ctx.env, ctx.fetchImpl, ctx.now), latency: Date.now() - t0 }; } catch (e) {
-    const httpStatus = e.status || 500;
-    return { x: null, ocrError: e instanceof OcrError ? e.message : 'อ่านรูปไม่สำเร็จ', httpStatus, errCode: `http_${httpStatus}`, latency: Date.now() - t0 };
-  }
-}
-async function findDuplicate(ctx, x, excludeId) {
-  if (!x?.billNumber || !x.total) return null;
-  const dup = await ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?select=id&bill_number=eq.${encodeURIComponent(x.billNumber)}&total=eq.${encodeURIComponent(x.total)}${excludeId ? `&id=neq.${excludeId}` : ''}&limit=1`);
-  return dup?.[0]?.id || null;
-}
-async function logOcrRun(ctx, orderId, provider, r) {
-  try {
-    await ctx.db.rest(ctx.auth.token, 'POST', 'receipt_ocr_runs', { body: { order_id: orderId, provider, model: r.x?.model || null, ok: !!r.x, http_status: r.httpStatus || null, error_code: r.errCode || null, latency_ms: r.latency } });
-  } catch (e) { console.error('ocr run log failed', e.code || e.status); }
-}
-async function dupCodeOf(ctx, dupId) {
-  return dupId ? (await ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?select=code&id=eq.${dupId}&limit=1`))?.[0]?.code : '';
-}
-
 async function createOrder(ctx) {
-  const { db, auth, env } = ctx;
   const b = ctx.body || {};
-  if (!branchesFrom(env).includes(b.branch)) throw new ApiError(422, 'เลือกสาขาให้ถูกต้อง');
+  if (!branchesFrom(ctx.env).includes(b.branch)) throw new ApiError(422, 'เลือกสาขาให้ถูกต้อง');
   let img;
   try { img = parseImageDataUrl(b.image); } catch (e) { throw new ApiError(e.status || 400, e.message); }
-
-  const id = randomUUID();
-  const path = `${id}/${randomUUID()}.${EXT[img.mime]}`;
-  await db.upload(auth.token, BUCKET, path, img.bytes, img.mime);
-
-  const status = ocrStatus(env);
-  const run = status.provider !== 'none' ? await readImage(ctx, b.image) : { x: null };
-  const { x } = run;
-  const dupId = await findDuplicate(ctx, x);
-  const needsCheck = !!x && needsCheckFor(x, dupId);
-  const row = {
-    id, branch: b.branch, source: 'upload', sender_name: auth.user.name, image_path: path,
-    ocr_status: x ? 'done' : status.provider === 'none' ? 'skipped' : 'failed',
-    review_status: status.provider !== 'none' && (!x || needsCheck) ? 'needs_check' : 'needs_review',
-    ...ocrDataColumns(x),
-    ocr_provider: status.provider === 'none' ? null : status.provider, ocr_model: x?.model || null, ocr_confidence: x ? x.confidence : null,
-    ocr_uncertain: x ? x.uncertain : [], ocr_original: x ? Object.fromEntries(OCR_FIELD_KEYS.map(k => [k, x[k]])) : null, ocr_raw_text: x?.rawText || null, duplicate_of: dupId, created_by: auth.user.id,
-  };
-  const [saved] = await db.rest(auth.token, 'POST', 'receipt_orders', { body: row, prefer: 'return=representation' });
-  const items = (x?.items || []).map((i, n) => ({ order_id: id, position: n, product: i.product, size: i.size, color: i.color }));
-  if (items.length) await db.rest(auth.token, 'POST', 'receipt_order_items', { body: items });
-  if (status.provider !== 'none') await logOcrRun(ctx, id, status.provider, run);
-  await logEvent(ctx, id, 'created', { source: 'upload', ocr: row.ocr_status });
-  const urls = await db.sign(auth.token, BUCKET, [path]);
-  const order = mapRow({ ...saved, receipt_order_items: items }, urls[path] || '', dupId ? { [dupId]: await dupCodeOf(ctx, dupId) } : {});
-  return ok({ order, ocrError: run.ocrError || '' }, 201);
+  const status = ocrStatus(ctx.env);
+  const run = status.provider !== 'none' ? await readImage(ctx, b.image) : null;
+  const { order } = await insertOrder(ctx, { bytes: img.bytes, mime: img.mime, branch: b.branch, source: 'upload', senderName: ctx.auth.user.name, run });
+  return ok({ order, ocrError: run?.ocrError || '' }, 201);
 }
 
 const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
@@ -246,7 +182,17 @@ async function deleteOrder(ctx) {
   return ok({ id, code: o.code });
 }
 
+// Vercel Cron เรียกพร้อม Authorization: Bearer <CRON_SECRET> — เก็บตกรูปจาก LINE ที่ OCR ล้ม/ค้าง
+async function lineInboxCron(ctx) {
+  const secret = ctx.env.CRON_SECRET;
+  const given = Buffer.from(String(ctx.req.headers.authorization || ''));
+  const want = Buffer.from(`Bearer ${secret}`);
+  if (!secret || given.length !== want.length || !timingSafeEqual(given, want)) throw new ApiError(401, 'ไม่มีสิทธิ์');
+  return ok(await processDueInbox({ env: ctx.env, fetchImpl: ctx.fetchImpl, now: ctx.now }));
+}
+
 const ROUTES = [
+  ['GET', /^\/api\/cron\/line-inbox$/, lineInboxCron, { public: true }],
   ['POST', /^\/api\/auth\/login$/, login, { public: true }],
   ['POST', /^\/api\/auth\/logout$/, logout, { public: true }],
   ['GET', /^\/api\/auth\/me$/, me],

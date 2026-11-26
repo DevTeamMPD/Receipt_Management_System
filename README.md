@@ -13,7 +13,7 @@
 
 - เบราว์เซอร์ไม่คุยกับฐานข้อมูลโดยตรง และไม่มีคีย์ใด ๆ — ล็อกอินแล้วได้คุกกี้ HttpOnly
 - API ใช้ **สิทธิ์ของผู้ใช้ที่ล็อกอิน** ติดต่อ Supabase (ไม่ใช้คีย์ service role) และฐานข้อมูลตรวจสิทธิ์ซ้ำด้วย RLS: ใช้ได้เฉพาะคนที่อยู่ในตาราง `receipt_users` และเปิดใช้งานอยู่
-- ตารางทั้งหมดขึ้นต้นด้วย `receipt_` (SQL อยู่ใน `db/` — รันตามลำดับ `receipt_desk_schema_v1.sql`, `receipt_desk_access_v1.sql`, `receipt_desk_delete_v1.sql`, `receipt_desk_delete_v2.sql`)
+- ตารางทั้งหมดขึ้นต้นด้วย `receipt_` (SQL อยู่ใน `db/` — รันตามลำดับ `receipt_desk_schema_v1.sql`, `receipt_desk_access_v1.sql`, `receipt_desk_delete_v1.sql`, `receipt_desk_delete_v2.sql`, `receipt_desk_line_v1.sql`)
 
 ## สถานะใบสั่งซื้อ
 
@@ -73,6 +73,16 @@ npm run dev
 - **ชั้นฟรีของ Gemini/Typhoon อาจนำข้อมูลไปพัฒนาผลิตภัณฑ์** ใบสั่งซื้อมีข้อมูลลูกค้า (ความเสี่ยงที่เจ้าของโปรเจกต์รับไว้ — ดู Decision Log ใน Notion) ส่งเฉพาะรูป ลบ EXIF แล้ว
 - โค้ด Gemini/Typhoon ทดสอบด้วย fetch จำลองเท่านั้น ยังไม่เคยเรียก API จริงในการพัฒนา
 - เปรียบเทียบผู้ให้บริการ: `node --env-file=.env scripts/ocr-bakeoff.js <โฟลเดอร์รูป> --providers=gemini,typhoon` (รูปคู่กับ `ชื่อ.expected.json` พิมพ์เฉพาะคะแนน ไม่พิมพ์ข้อมูลลูกค้า อย่า commit รูปจริง)
+
+## รับรูปจากกลุ่ม LINE (LINE OA)
+
+บอท LINE OA อยู่ในกลุ่มของแต่ละสาขา **เงียบ ไม่ตอบในกลุ่ม** — ทุกรูปที่ส่งในกลุ่มเข้า "กล่องรับรูป" (`receipt_line_inbox`) แล้วให้ OCR ตัดสิน:
+เป็นใบสั่งซื้อ → สร้างใบ (`source = 'line'` ชื่อผู้ส่งจากโปรไฟล์ LINE) · ไม่ใช่ใบสั่งซื้อ → ทิ้งรูป · OCR ล้ม → cron ลองใหม่ทุก 5 นาที ครบ 3 ครั้งแล้วสร้างใบแบบ "อ่านไม่สำเร็จ" (กันใบจริงหาย)
+
+- กลุ่ม 1 กลุ่ม = 1 สาขา: ชื่อกลุ่มมีชื่อสาขาอยู่ชื่อเดียว (เช่น "Sales บางนา") ระบบผูกให้เอง ไม่งั้นตั้งเองด้วย SQL ใน `db/receipt_desk_line_v1.sql` — **กลุ่มที่ยังไม่ผูกสาขา ระบบไม่รับรูป**
+- Webhook: `https://<โดเมน>/api/line/webhook` · ตรวจลายเซ็นจากไบต์ดิบ (ตั้ง `NODEJS_HELPERS=0` บน Vercel)
+- เขียนฐานข้อมูลด้วยบัญชีระบบ (`LINE_SERVICE_EMAIL`/`LINE_SERVICE_PASSWORD`) ผ่าน RLS เหมือนผู้ใช้ ไม่ใช้คีย์ service role
+- ตั้งค่า OA: เปิด "Allow bot to join group chats" · ปิด Auto-reply และ Greeting message · เปิด Use webhook
 
 ## ความปลอดภัยและข้อมูลส่วนบุคคล
 
