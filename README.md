@@ -40,7 +40,8 @@
    | `OCR_PROVIDER` | `gemini` / `typhoon` — ไม่ตั้ง = ไม่ใช้ OCR (เก็บรูปแล้วกรอกเอง) |
    | `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_FALLBACK_MODEL` | ดู `.env.example` |
    | `TYPHOON_API_KEY` | ถ้าใช้ Typhoon |
-   | `OCR_TIMEOUT_MS`, `OCR_BUDGET_MS` | เวลารอโมเดลต่อคำขอ / รวมทั้งหมด (ค่าเริ่มต้น 20 วิ / 40 วิ) — ถ้าเกิน ระบบเก็บรูปไว้แล้วให้กรอกเอง |
+   | `OCR_BUDGET_MS`, `OCR_TIMEOUT_MS` | เวลารอโมเดลรวมทั้งหมด / เพดานต่อคำขอ (ค่าเริ่มต้น 48 วิ / เท่ากับงบรวม) — ถ้าเกิน ระบบเก็บรูปไว้แล้วให้กรอกเอง |
+| `GEMINI_THINKING_LEVEL` | ระดับการคิดของ Gemini (ค่าเริ่มต้น `low` เพื่อให้ตอบเร็ว; `default` = ใช้ค่าของรุ่น) |
    | `RECEIPT_BRANCHES` | รายชื่อสาขา คั่นด้วยจุลภาค (ค่าเริ่มต้น สยาม,ลาดพร้าว,บางนา,รังสิต) |
 
 4. ตรวจคีย์ OCR: `npm run check-keys`
