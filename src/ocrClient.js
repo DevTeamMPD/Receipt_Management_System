@@ -16,7 +16,8 @@ export async function prepareImage(file) {
     return canvas.toDataURL('image/jpeg', quality);
   };
   let out = '';
-  for (const [size, quality] of [[1600, 0.85], [1600, 0.7], [1400, 0.7], [1200, 0.65], [1000, 0.6]]) {
+  // ด้านยาว 2400px ให้ตัวเลข/ลายมือเล็ก ๆ ชัดพอสำหรับ OCR และซูมดู · ไฟล์ใหญ่เกินค่อยลดคุณภาพ/ขนาดลง
+  for (const [size, quality] of [[2400, 0.85], [2400, 0.75], [2000, 0.75], [1600, 0.7], [1400, 0.7], [1200, 0.65], [1000, 0.6]]) {
     out = draw(size, quality);
     if (out.length <= MAX_DATA_URL) break;
   }

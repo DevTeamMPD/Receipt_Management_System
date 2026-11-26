@@ -1,5 +1,5 @@
 import { providers, OcrError } from './providers.js';
-import { normalizeExtraction } from './normalize.js';
+import { HANDWRITTEN_FIELDS, normalizeExtraction } from './normalize.js';
 
 const MAX_BYTES = 8 * 1024 * 1024;
 
@@ -30,6 +30,6 @@ export async function runOcr(body, env, fetchImpl = fetch, now = new Date()) {
   // โหมดสาธิตสร้างข้อมูลสมมติ ต้องเปิดโดยตั้งใจเท่านั้น (ห้ามเปิดในระบบจริง)
   if (status.provider === 'mock' && env.OCR_ALLOW_MOCK !== '1') throw new OcrError('โหมดสาธิตถูกปิดในระบบนี้', 503);
   const { mime, base64 } = parseImageDataUrl(body?.image);
-  const { raw, rawText, model } = await providers[status.provider]({ base64, mime, dataUrl: `data:${mime};base64,${base64}` }, env, fetchImpl);
-  return { provider: status.provider, model: model || '', demo: status.demo, rawText, ...normalizeExtraction(raw, now) };
+  const { raw, rawText, model, fallback } = await providers[status.provider]({ base64, mime, dataUrl: `data:${mime};base64,${base64}` }, env, fetchImpl);
+  return { provider: status.provider, model: model || '', fallback: !!fallback, demo: status.demo, rawText, ...normalizeExtraction(raw, now, { alsoUncertain: fallback ? HANDWRITTEN_FIELDS : [] }) };
 }

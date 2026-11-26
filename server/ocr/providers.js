@@ -133,7 +133,8 @@ export async function geminiProvider({ base64, mime }, env, fetchImpl = fetch) {
         const data = await res.json();
         const out = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
         if (!out) throw new OcrError('Gemini ไม่ได้ตอบข้อมูลกลับมา (รูปอาจไม่ชัดหรือถูกกรอง)', 502);
-        return { raw: parseJsonLoose(out), rawText: out, model };
+        // fallback = ตอบโดยรุ่นสำรอง (รุ่นที่ไม่ใช่ตัวแรก) — อ่านลายมือ/ช่องติ๊กแม่นน้อยกว่า ให้คนตรวจช่องลายมือทุกช่อง
+        return { raw: parseJsonLoose(out), rawText: out, model, fallback: i > 0 };
       } catch (e) {
         if (!(e instanceof OcrError) || !SKIPPABLE.has(e.status)) throw e;
         errors.push(e);

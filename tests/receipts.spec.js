@@ -237,6 +237,32 @@ test('a failed read can be retried from the banner and only fills the blank fiel
   await expect(page.getByLabel('เลขที่บิล')).not.toHaveValue('');
 });
 
+test('the full-size photo can be zoomed, panned, rotated and reset', async ({ page }) => {
+  await installApi(page);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="1200" height="1600" fill="#eee"/><text x="100" y="200" font-size="80">ใบสั่งซื้อ</text></svg>';
+  await page.route('**/storage/v1/object/sign/**', route => route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg }));
+  await page.goto('/');
+  await page.getByRole('button', { name: /ขยายรูปใบสั่งซื้อ/ }).click();
+  const dialog = page.getByRole('dialog');
+  const level = dialog.locator('.zoom-level');
+  await expect(level).toHaveText('100%');
+  await expect(dialog.getByRole('button', { name: 'ซูมออก' })).toBeDisabled();
+  await dialog.getByRole('button', { name: 'ซูมเข้า' }).click();
+  await expect(level).toHaveText('150%');
+  const box = dialog.locator('.zoom-box');
+  await box.focus();
+  await page.keyboard.press('+');
+  await expect(level).toHaveText('225%');
+  await page.keyboard.press('ArrowRight');
+  await expect(box.locator('img')).toHaveAttribute('style', /translate\(-40px, 0px\)/);
+  await dialog.getByRole('button', { name: 'หมุนรูป 90 องศา' }).click();
+  await expect(level).toHaveText('100%');
+  await expect(box.locator('img')).toHaveAttribute('style', /rotate\(90deg\)/);
+  await dialog.getByRole('button', { name: 'ซูมเข้า' }).click();
+  await dialog.getByRole('button', { name: 'พอดีจอ' }).click();
+  await expect(level).toHaveText('100%');
+});
+
 test('uploading without OCR configured keeps the photo and asks for manual entry', async ({ page }) => {
   const api = await open(page, { env: { OCR_PROVIDER: '' } });
   await page.getByRole('button', { name: 'อัปโหลดใบสั่งซื้อ' }).click();

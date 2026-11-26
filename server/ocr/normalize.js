@@ -48,7 +48,10 @@ export function parsePhone(value) {
 const NAME_MAP = { orderDateText: 'orderDate', shipDateText: 'shipDate' };
 
 // แปลงผลดิบจากโมเดลเป็นระเบียนที่แอปใช้ และประเมินความมั่นใจจากกฎตรวจ (ไม่เชื่อค่าความมั่นใจที่โมเดลบอกเอง)
-export function normalizeExtraction(raw, now = new Date()) {
+// ช่องที่มาจากลายมือหรือการติ๊ก — ถ้าอ่านด้วยรุ่นสำรอง ให้ไฮไลต์ทุกช่องนี้ไว้ตรวจกับรูป
+export const HANDWRITTEN_FIELDS = ['customerName', 'phone', 'address', 'subDistrict', 'district', 'postcode', 'total', 'items'];
+
+export function normalizeExtraction(raw, now = new Date(), { alsoUncertain = [] } = {}) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const rec = {
     billNumber: text(r.billNumber),
@@ -73,7 +76,7 @@ export function normalizeExtraction(raw, now = new Date()) {
   // วันที่ที่เขียนไว้แต่แปลงไม่ได้ ถือว่าไม่แน่ใจ (ช่องจัดส่งเว้นว่างได้)
   if (text(r.shipDateText) && !rec.shipDate) failed.push('shipDate');
   const known = new Set(Object.keys(rec));
-  const uncertain = [...new Set([...declared, ...failed])].filter(k => known.has(k));
+  const uncertain = [...new Set([...declared, ...failed, ...alsoUncertain])].filter(k => known.has(k));
   let confidence = Math.max(35, 98 - 9 * uncertain.length);
   if (docType !== 'order_form') confidence = Math.min(confidence, 50);
   return { ...rec, docType, uncertain, confidence };
