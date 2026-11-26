@@ -4,10 +4,11 @@ import { branchesFrom } from './orders.js';
 import { BUCKET, EXT, insertOrder, logOcrRun, readImage } from './orderCreate.js';
 import { branchFromGroupName, lineClient, lineConfigured, verifyLineSignature } from './line.js';
 import { ocrStatus } from './ocr/handler.js';
+import { isBebeplayOrderForm } from './ocr/normalize.js';
 
 // รับรูปใบสั่งซื้อจากกลุ่ม LINE (บอทเงียบ ไม่ตอบในกลุ่ม)
 // webhook: ตรวจลายเซ็น → จดรูปลงกล่องรับรูป → ตอบ 200 ทันที → งานเบื้องหลังโหลดรูป + OCR
-// OCR บอกว่าเป็นใบสั่งซื้อ → สร้างใบ · ไม่ใช่ → ทิ้งรูป · OCR ล้ม → ลองใหม่ (cron) ครบ MAX_ATTEMPTS แล้วสร้างใบแบบ "อ่านไม่สำเร็จ" กันใบจริงหาย
+// OCR บอกว่าเป็นใบส่งซื้อสินค้า Bebeplay (ดูหัวกระดาษ) → สร้างใบ · ไม่ใช่ → ทิ้งรูป · OCR ล้ม → ลองใหม่ (cron) ครบ MAX_ATTEMPTS แล้วสร้างใบแบบ "อ่านไม่สำเร็จ" กันใบจริงหาย
 
 export const MAX_ATTEMPTS = 3;
 const RETRY_AFTER_MS = 2 * 60 * 1000;
@@ -113,10 +114,11 @@ export async function processInboxItem(ctx, id) {
 
     const run = ocrStatus(ctx.env).configured ? await readImage(ctx, `data:${mime};base64,${bytes.toString('base64')}`) : null;
     const x = run?.x;
-    if (x && x.docType !== 'order_form') {
+    if (x && !isBebeplayOrderForm(x)) {
       await logOcrRun(ctx, null, ocrStatus(ctx.env).provider, run);
       try { await db.remove(auth.token, BUCKET, [imagePath]); } catch (e) { console.error('line image cleanup failed', e.code || e.status); }
-      await finish({ status: 'ignored', image_path: null, last_error: null });
+      const why = x.docType === 'order_form' ? `หัวกระดาษไม่ใช่ใบส่งซื้อสินค้า Bebeplay ("${x.formTitle || 'ไม่มีหัวกระดาษ'}")` : `ไม่ใช่ใบสั่งซื้อ (${x.docType})`;
+      await finish({ status: 'ignored', image_path: null, last_error: why.slice(0, 300) });
       return 'ignored';
     }
     if (run && !x && attempt < MAX_ATTEMPTS) {
