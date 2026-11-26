@@ -79,5 +79,14 @@ export function normalizeExtraction(raw, now = new Date(), { alsoUncertain = [] 
   const uncertain = [...new Set([...declared, ...failed, ...alsoUncertain])].filter(k => known.has(k));
   let confidence = Math.max(35, 98 - 9 * uncertain.length);
   if (docType !== 'order_form') confidence = Math.min(confidence, 50);
-  return { ...rec, docType, uncertain, confidence };
+  return { ...rec, docType, formTitle: text(r.formTitle), uncertain, confidence };
+}
+
+// ใบที่รับจากกลุ่ม LINE ต้องเป็นใบสั่งซื้อของ Bebeplay เท่านั้น — หัวกระดาษต้องมีทั้ง "ใบส่ง/สั่งซื้อสินค้า" และชื่อ Bebeplay
+// (กันใบเสร็จร้านอื่น/ใบสั่งซื้อของแบรนด์อื่นที่ถูกส่งเข้ากลุ่ม)
+const squash = v => String(v || '').toLowerCase().replace(/[\s\u200b.\-_]/g, '');
+export function isBebeplayOrderForm(x) {
+  if (!x || x.docType !== 'order_form') return false;
+  const t = squash(x.formTitle);
+  return /ใบ(ส่ง|สั่ง)ซื้อ/.test(t) && /(bebeplay|เบเบ้เพลย์|บีบีเพลย์)/.test(t);
 }

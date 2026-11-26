@@ -1,6 +1,6 @@
 // ฟิลด์ที่ขอจากโมเดล OCR และ prompt — ใช้ร่วมกันทุกผู้ให้บริการ
 export const EXTRACT_FIELDS = [
-  'docType', 'billNumber', 'orderDateText', 'customerName', 'phone', 'address', 'subDistrict', 'district', 'province',
+  'docType', 'formTitle', 'billNumber', 'orderDateText', 'customerName', 'phone', 'address', 'subDistrict', 'district', 'province',
   'postcode', 'shipDateText', 'items', 'remark', 'total', 'posNumber', 'posTotal', 'uncertain',
 ];
 
@@ -22,15 +22,16 @@ Rules:
 - If a POS receipt is visible: posNumber = its receipt number exactly as printed after "Rcpt" (for example "222 - 123456") and posTotal = the final amount paid (digits only). Otherwise "".
 - uncertain: list the field names (from the JSON keys) whose value you are NOT sure about, especially hard-to-read handwriting. Never guess silently.
 - docType: "order_form" if an order form is visible, "receipt_only" if only a receipt, otherwise "other".
+- formTitle: the printed title in the header at the top of the document, copied exactly, together with the brand / logo text printed in the same header (for example "ใบส่งซื้อสินค้า Bebeplay"). "" if there is no printed title.
 
-JSON keys: docType, billNumber, orderDateText, customerName, phone, address, subDistrict, district, province, postcode, shipDateText, items [{product,size,color}], remark, total, posNumber, posTotal, uncertain [string].`;
+JSON keys: docType, formTitle, billNumber, orderDateText, customerName, phone, address, subDistrict, district, province, postcode, shipDateText, items [{product,size,color}], remark, total, posNumber, posTotal, uncertain [string].`;
 
 const str = { type: 'STRING' };
 export const GEMINI_SCHEMA = {
   type: 'OBJECT',
   properties: {
     docType: { type: 'STRING', enum: ['order_form', 'receipt_only', 'other'] },
-    billNumber: str, orderDateText: str, customerName: str, phone: str, address: str, subDistrict: str, district: str,
+    formTitle: str, billNumber: str, orderDateText: str, customerName: str, phone: str, address: str, subDistrict: str, district: str,
     province: str, postcode: str, shipDateText: str, remark: str, total: str, posNumber: str, posTotal: str,
     items: { type: 'ARRAY', items: { type: 'OBJECT', properties: { product: str, size: str, color: str }, required: ['product', 'size', 'color'] } },
     uncertain: { type: 'ARRAY', items: str },

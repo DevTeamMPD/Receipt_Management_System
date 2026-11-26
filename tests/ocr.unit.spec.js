@@ -297,3 +297,16 @@ test('demo provider is refused unless explicitly allowed, and OCR can be switche
   expect(out.model).toBe('mock');
   await expect(runOcr({ image: png }, {}, fakeFetch([]))).rejects.toMatchObject({ status: 503 });
 });
+
+test('only a Bebeplay order-form header counts for LINE intake', async () => {
+  const { isBebeplayOrderForm } = await import('../server/ocr/normalize.js');
+  const f = (formTitle, docType = 'order_form') => isBebeplayOrderForm({ docType, formTitle });
+  expect(f('ใบส่งซื้อสินค้า Bebeplay')).toBe(true);
+  expect(f('ใบสั่งซื้อสินค้า  BEBE PLAY')).toBe(true);
+  expect(f('Central x Bebeplay ใบส่งซื้อสินค้า')).toBe(true);
+  expect(f('ใบส่งซื้อสินค้า')).toBe(false);
+  expect(f('ใบเสร็จรับเงิน Bebeplay')).toBe(false);
+  expect(f('ใบสั่งซื้อสินค้า ร้านอื่น')).toBe(false);
+  expect(f('ใบส่งซื้อสินค้า Bebeplay', 'receipt_only')).toBe(false);
+  expect(isBebeplayOrderForm(null)).toBe(false);
+});

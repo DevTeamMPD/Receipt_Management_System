@@ -8,7 +8,7 @@ import { fakeSupabase, URL_, ANON, NOW } from './helpers/fakeSupabase.js';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 const SECRET = 'line-secret';
 const ORDER = {
-  docType: 'order_form', billNumber: 'OD-L1', orderDateText: '13 พ.ค. 69', customerName: 'ลูกค้า ไลน์', phone: '0812345678', address: '1 ซอยทดสอบ',
+  docType: 'order_form', formTitle: 'ใบส่งซื้อสินค้า Bebeplay', billNumber: 'OD-L1', orderDateText: '13 พ.ค. 69', customerName: 'ลูกค้า ไลน์', phone: '0812345678', address: '1 ซอยทดสอบ',
   subDistrict: 'บางนา', district: 'บางนา', province: 'กรุงเทพมหานคร', postcode: '10260', shipDateText: '', items: [{ product: 'คอกกั้นเด็ก', size: 'L', color: 'ฟ้า' }],
   remark: '', total: '15,350', posNumber: '', posTotal: '', uncertain: [],
 };
@@ -17,7 +17,7 @@ const env = {
   LINE_CHANNEL_SECRET: SECRET, LINE_CHANNEL_ACCESS_TOKEN: 'line-token', LINE_SERVICE_EMAIL: 'staff@example.com', LINE_SERVICE_PASSWORD: 'pw', CRON_SECRET: 'cron-secret',
 };
 
-// Supabase จำลอง + LINE + Gemini จำลอง (gemini = 'order' | 'other' | 'busy')
+// Supabase จำลอง + LINE + Gemini จำลอง (gemini = 'order' | 'other' | 'otherForm' | 'busy')
 function world({ groups = { G1: 'Sales บางนา', G2: 'ทีมขาย' }, gemini = 'order', lineContent = 200 } = {}) {
   resetLineServiceSession();
   const sb = fakeSupabase();
@@ -38,7 +38,7 @@ function world({ groups = { G1: 'Sales บางนา', G2: 'ทีมขาย
     }
     if (u.includes('generativelanguage')) {
       if (state.gemini === 'busy') return { ok: false, status: 503, json: async () => ({}) };
-      const raw = state.gemini === 'order' ? ORDER : { ...ORDER, docType: 'other' };
+      const raw = state.gemini === 'order' ? ORDER : state.gemini === 'otherForm' ? { ...ORDER, formTitle: 'ใบเสร็จรับเงิน ร้านตัวอย่าง' } : { ...ORDER, docType: 'other' };
       return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(raw) }] } }] }) };
     }
     return sb.fetchImpl(url, init);
@@ -97,6 +97,13 @@ test('a photo that is not an order form is dropped and its image deleted', async
   expect(w.sb.db.orders).toHaveLength(0);
   expect(w.sb.db.receipt_line_inbox[0]).toMatchObject({ status: 'ignored', image_path: null });
   expect(w.sb.db.removed).toEqual([expect.stringMatching(/^line\//)]);
+});
+
+test('an order form whose header is not "ใบส่งซื้อสินค้า Bebeplay" is dropped too', async () => {
+  const w = world({ gemini: 'otherForm' });
+  await post(w, [imageEvent('m8')]);
+  expect(w.sb.db.orders).toHaveLength(0);
+  expect(w.sb.db.receipt_line_inbox[0]).toMatchObject({ status: 'ignored', image_path: null, last_error: expect.stringContaining('ใบเสร็จรับเงิน') });
 });
 
 test('when OCR is busy the photo is retried by cron, and after the last try it still becomes an order', async () => {
