@@ -190,15 +190,23 @@ legend { font-weight: 600; font-size: 17px; padding: 0 8px; color: var(--primary
 
 /* หน้าต่างป๊อปอัป */
 .modal { border: 1px solid var(--line); border-radius: 16px; padding: 22px; width: calc(100% - 32px); max-width: 540px; max-height: 90vh; overflow-y: auto; color: var(--ink); box-shadow: 0 24px 80px rgba(15, 25, 40, .3); }
-.modal-image { max-width: 640px; }
+.modal-image { max-width: min(1100px, calc(100vw - 32px)); width: calc(100% - 32px); }
 .modal::backdrop { background: rgba(20, 30, 45, .55); }
 .modal-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .modal-header h2 { margin: 0; font-size: 19px; }
 .modal-desc { margin: 0 0 12px; color: var(--ink-2); }
 .modal pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.9; background: #f4f6f9; border: 1px solid var(--line-soft); border-radius: 10px; padding: 16px; margin: 0; }
-.image-viewer { background: #dfe5ee; border-radius: 12px; padding: 12px; text-align: center; }
-.image-viewer img { width: 100%; height: auto; display: block; border-radius: 6px; }
+.image-viewer { background: #dfe5ee; border-radius: 12px; padding: 8px 12px 12px; text-align: center; }
 .image-viewer p { margin: 8px 0 0; font-size: 14px; color: var(--ink-2); }
+.zoom-tools { display: flex; align-items: center; justify-content: center; gap: 4px; margin-bottom: 8px; }
+.zoom-tools .icon-btn { color: var(--ink); }
+.zoom-level { min-width: 56px; font-variant-numeric: tabular-nums; font-weight: 500; }
+.zoom-box { position: relative; height: max(240px, min(calc(90vh - 200px), 900px)); overflow: hidden; border-radius: 8px; background: #c9d2de; display: flex; align-items: center; justify-content: center; touch-action: none; cursor: zoom-in; user-select: none; }
+.zoom-box.zoomed { cursor: grab; }
+.zoom-box.zoomed:active { cursor: grabbing; }
+.zoom-box:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
+.zoom-box img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; transform-origin: center; will-change: transform; pointer-events: none; -webkit-user-drag: none; }
+.items-unsure { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; }
 .confirm { margin: 8px 0 16px; }
 .confirm > div { display: flex; justify-content: space-between; gap: 20px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
 .confirm dt { color: var(--ink-2); white-space: nowrap; }

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, LogOut, Maximize2, MessageCircle, Monitor, Plus, RefreshCw, Search, Send, Smartphone, TriangleAlert, Trash2, Upload, X } from 'lucide-react';
 import { api, ApiError } from './api.js';
 import { prepareImage } from './ocrClient.js';
+import ImageViewer from './ImageViewer.jsx';
 import { formatReceived, isPending, monthNames, money, statusLabels, thaiDate } from './data.js';
 import { validate, warnings, fieldOrder } from './validation.js';
 
@@ -411,7 +412,7 @@ export default function App() {
                   {current.imageUrl
                     ? <button className="photo" aria-label={`ขยายรูปใบสั่งซื้อ ${current.code}`} onClick={() => setDialog({ type: 'image' })}>
                       <img src={current.imageUrl} alt={`รูปใบสั่งซื้อ ${current.code}`} onError={() => refresh()} />
-                      <span className="zoom"><Maximize2 size={16} aria-hidden="true" />คลิกเพื่อขยาย</span>
+                      <span className="zoom"><Maximize2 size={16} aria-hidden="true" />คลิกเพื่อขยาย/ซูม</span>
                     </button>
                     : <div className="photo no-photo"><FileText size={28} aria-hidden="true" />ไม่มีรูป</div>}
                   <p className="photo-note">รูปต้นฉบับที่อัปโหลด (ย่อขนาดและลบข้อมูล EXIF แล้ว)</p>
@@ -464,6 +465,7 @@ export default function App() {
                   </fieldset>
 
                   <fieldset><legend>รายการสินค้า</legend>
+                    {unsure('items') && <p className="unsure items-unsure"><TriangleAlert size={14} aria-hidden="true" />OCR ไม่แน่ใจ ตรวจสินค้า ขนาด และสีที่ติ๊กกับรูป</p>}
                     {current.items.length === 0 && <p className="hint">ยังไม่มีรายการสินค้า</p>}
                     {current.items.map((it, i) => <div className="item-row" key={i}>
                       <input aria-label={`สินค้า ${i + 1}`} placeholder="สินค้า" value={it.product} readOnly={locked} onChange={e => setItem(i, 'product', e.target.value)} />
@@ -523,7 +525,7 @@ export default function App() {
         <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" />ลบแล้วกู้คืนไม่ได้ ถ้าเป็นใบจริงแต่ไม่ถูกต้อง ให้ใช้ "ปฏิเสธใบนี้" แทน</div>
         <div className="modal-actions"><button className="btn outline" onClick={() => setDialog(null)}>ยกเลิก</button><button className="btn danger" disabled={busy} onClick={removeOrder}><Trash2 size={18} aria-hidden="true" />ลบใบนี้</button></div>
       </> : <p className="modal-desc">ไม่พบใบนี้แล้ว</p>; })()}
-      {dialog.type === 'image' && current && <div className="image-viewer"><img src={current.imageUrl} alt="ภาพใบสั่งซื้อขนาดใหญ่" /></div>}
+      {dialog.type === 'image' && current && <ImageViewer src={current.imageUrl} alt={`ภาพใบสั่งซื้อ ${current.code}`} />}
       {dialog.type === 'ocr' && current && <><p className="modal-desc">ข้อความที่ OCR อ่านได้ก่อนแก้ไข แยกจากฟอร์มที่คุณกำลังตรวจ (มีข้อมูลลูกค้า)</p><pre>{current.ocrRaw}</pre></>}
       {dialog.type === 'confirm' && current && <>
         <p className="modal-desc">ตรวจข้อมูลครั้งสุดท้าย เมื่อยืนยันแล้วข้อมูลจะถูกล็อก และใบนี้จะรอลงใน JST เพื่อส่งของให้ลูกค้า</p>

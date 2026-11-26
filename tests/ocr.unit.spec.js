@@ -154,6 +154,17 @@ test('Gemini skips a busy/missing model to the next one right away, and gives th
   expect(geminiModels({})).toEqual(['gemini-flash-lite-latest']);
 });
 
+test('an answer from the backup model highlights every handwritten field for checking', async () => {
+  const ok = { json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } };
+  const env = { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'k', GEMINI_MODELS: 'big-m,lite-m', OCR_RETRY_DELAY_MS: '0' };
+  const viaBackup = await runOcr({ image: png }, env, fakeFetch([{ status: 503 }, ok]), NOW);
+  expect(viaBackup).toMatchObject({ model: 'lite-m', fallback: true });
+  expect(viaBackup.uncertain).toEqual(expect.arrayContaining(['customerName', 'phone', 'address', 'items', 'total']));
+  expect(viaBackup.confidence).toBeLessThan(80);
+  const viaFirst = await runOcr({ image: png }, env, fakeFetch([ok]), NOW);
+  expect(viaFirst).toMatchObject({ model: 'big-m', fallback: false, uncertain: [] });
+});
+
 test('a slow first model is cut off early enough that the backup still gets its turn', async () => {
   const ok = { json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } };
   const seen = [];
