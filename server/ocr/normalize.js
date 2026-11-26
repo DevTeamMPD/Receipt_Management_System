@@ -3,12 +3,25 @@ import { validate } from '../../src/validation.js';
 const thaiDigits = s => s.replace(/[๐-๙]/g, d => String('๐๑๒๓๔๕๖๗๘๙'.indexOf(d)));
 const text = v => (v == null ? '' : String(v)).replace(/\s+/g, ' ').trim();
 
-// อ่านวันที่ที่เขียนบนฟอร์ม (พ.ศ. แบบเต็ม/ย่อ หรือ ค.ศ.) แล้วคืนค่า YYYY-MM-DD (ค.ศ.) หรือ '' ถ้าอ่านไม่ได้/ไม่สมเหตุสมผล
+// ชื่อเดือนไทยแบบย่อและเต็ม (ฟอร์มมักเขียน "13 พ.ค. 69") — ตัดจุด/ช่องว่างก่อนเทียบ
+const THAI_MONTHS = [
+  ['มค', 'มกราคม'], ['กพ', 'กุมภาพันธ์'], ['มีค', 'มีนาคม'], ['เมย', 'เมษายน'], ['พค', 'พฤษภาคม'], ['มิย', 'มิถุนายน'],
+  ['กค', 'กรกฎาคม'], ['สค', 'สิงหาคม'], ['กย', 'กันยายน'], ['ตค', 'ตุลาคม'], ['พย', 'พฤศจิกายน'], ['ธค', 'ธันวาคม'],
+];
+function thaiMonth(word) {
+  const w = word.replace(/[.\s]/g, '');
+  const i = THAI_MONTHS.findIndex(([short, full]) => w === short || w === full);
+  return i < 0 ? 0 : i + 1;
+}
+
+// อ่านวันที่ที่เขียนบนฟอร์ม (พ.ศ. แบบเต็ม/ย่อ หรือ ค.ศ. · เดือนเป็นตัวเลขหรือชื่อเดือนไทย) แล้วคืนค่า YYYY-MM-DD (ค.ศ.) หรือ '' ถ้าอ่านไม่ได้/ไม่สมเหตุสมผล
 export function parseDateText(value, now = new Date()) {
   const t = thaiDigits(text(value));
   let m = /^(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(\d{2,4})$/.exec(t);
   let d; let mo; let y;
+  const named = /^(\d{1,2})\s*[,/\-]?\s*([ก-๙.\s]+?)\s*[,/\-]?\s*(\d{2,4})$/.exec(t);
   if (m) { d = Number(m[1]); mo = Number(m[2]); y = Number(m[3]); }
+  else if (named && thaiMonth(named[2])) { d = Number(named[1]); mo = thaiMonth(named[2]); y = Number(named[3]); }
   else if ((m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t))) { y = Number(m[1]); mo = Number(m[2]); d = Number(m[3]); }
   else return '';
   if (y < 100) y += 2500; // ฟอร์มไทยเขียนปีย่อเป็น พ.ศ. เช่น 69 = 2569

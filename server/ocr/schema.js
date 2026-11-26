@@ -9,12 +9,17 @@ The photo may contain a handwritten order form and, next to it, a printed POS re
 
 Rules:
 - Copy text exactly as written. Do NOT translate, correct, normalise or invent anything. Use "" when a value is missing or unreadable.
-- Dates: copy exactly as written (for example "14/7/69"). Do not convert Buddhist/Gregorian years.
+- Dates: copy exactly as written (for example "14/7/69" or "13 พ.ค. 69"). Do not convert Buddhist/Gregorian years. The order date is the "วันที่สั่งซื้อ" box at the top right.
 - phone: the customer's phone number as written.
 - address = house number / soi / road only; put sub-district (แขวง/ตำบล), district (เขต/อำเภอ), province and postcode in their own fields.
-- items: one entry for every TICKED checkbox on the form. product = the product group printed on the form, size and color = the ticked options (empty string if none).
+- address: include EVERY handwritten address line (forms often continue the address on a second line under the first). Keep house numbers like "168/28".
+- items: the usual form ("Central x Bebeplay") is a table of product rows, each with "size" / "สี" (color) / "แบบ" sub-rows of checkboxes.
+  Rows usually include: คอกกั้นเด็ก, เบาะ PU size, ของเล่น ชิงช้า, ของเล่น สไลเดอร์ (with an extra "แผ่นเสริมสไลเดอร์" box), เก้าอี้ High Chair (with อุปกรณ์เสริม), เตียงนอน 7 in 1, รถเข็น, Adventure สไลเดอร์, ไวท์บอร์ด+เก้าอี้ รุ่น Scribble, ม้าโยก 2in1 Foal.
+  Go through the table ROW BY ROW and look at EVERY checkbox, including the right-hand columns. A box counts as ticked if it has a tick, cross or any pen mark.
+  Return one item per product row that has at least one ticked box: product = the row name as printed, size = the ticked size option text, color = the ticked colour/pattern option text (empty string if none ticked).
+  A ticked add-on box in a row (for example "แผ่นเสริมสไลเดอร์") is its own item with that text as product.
 - total: the handwritten "รวมยอดเงิน" amount, digits only.
-- If a POS receipt is visible: posNumber = its receipt number (Rcpt / TPNo) and posTotal = the final amount paid (digits only). Otherwise "".
+- If a POS receipt is visible: posNumber = its receipt number exactly as printed after "Rcpt" (for example "222 - 123456") and posTotal = the final amount paid (digits only). Otherwise "".
 - uncertain: list the field names (from the JSON keys) whose value you are NOT sure about, especially hard-to-read handwriting. Never guess silently.
 - docType: "order_form" if an order form is visible, "receipt_only" if only a receipt, otherwise "other".
 

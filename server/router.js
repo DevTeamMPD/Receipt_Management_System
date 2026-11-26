@@ -73,8 +73,42 @@ async function listOrders(ctx) {
   return ok({ orders: rows.map(r => mapRow(r, urls[r.image_path] || '', codeById)) });
 }
 
+// ช่องข้อมูลจากผล OCR (ใช้ทั้งตอนอัปโหลดและตอนกดอ่านรูปใหม่) — x = null คือไม่มีผล OCR
+function ocrDataColumns(x) {
+  return {
+    bill_number: x?.billNumber || '', order_date: x?.orderDate || null, total: x?.total ? Number(x.total) : null,
+    customer_name: x?.customerName || '', phone: x?.phone || '', address: x?.address || '', sub_district: x?.subDistrict || '',
+    district: x?.district || '', province: x?.province || '', postcode: x?.postcode || '', ship_date: x?.shipDate || null, remark: x?.remark || '',
+    pos_number: x?.posNumber || '', pos_total: x?.posTotal ? Number(x.posTotal) : null,
+  };
+}
+const OCR_FIELD_KEYS = ['billNumber', 'orderDate', 'customerName', 'phone', 'address', 'subDistrict', 'district', 'province', 'postcode', 'shipDate', 'remark', 'total', 'posNumber', 'posTotal', 'items'];
+const needsCheckFor = (x, dupId) => x.uncertain.length > 0 || x.confidence < 80 || x.docType !== 'order_form' || !!dupId;
+
+// อ่านรูปด้วย OCR พร้อมเก็บสถิติ (ไม่โยน error — ล้มเหลวคืน ocrError ให้คนกรอกเอง)
+async function readImage(ctx, image) {
+  const t0 = Date.now();
+  try { return { x: await runOcr({ image }, ctx.env, ctx.fetchImpl, ctx.now), latency: Date.now() - t0 }; } catch (e) {
+    const httpStatus = e.status || 500;
+    return { x: null, ocrError: e instanceof OcrError ? e.message : 'อ่านรูปไม่สำเร็จ', httpStatus, errCode: `http_${httpStatus}`, latency: Date.now() - t0 };
+  }
+}
+async function findDuplicate(ctx, x, excludeId) {
+  if (!x?.billNumber || !x.total) return null;
+  const dup = await ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?select=id&bill_number=eq.${encodeURIComponent(x.billNumber)}&total=eq.${encodeURIComponent(x.total)}${excludeId ? `&id=neq.${excludeId}` : ''}&limit=1`);
+  return dup?.[0]?.id || null;
+}
+async function logOcrRun(ctx, orderId, provider, r) {
+  try {
+    await ctx.db.rest(ctx.auth.token, 'POST', 'receipt_ocr_runs', { body: { order_id: orderId, provider, model: r.x?.model || null, ok: !!r.x, http_status: r.httpStatus || null, error_code: r.errCode || null, latency_ms: r.latency } });
+  } catch (e) { console.error('ocr run log failed', e.code || e.status); }
+}
+async function dupCodeOf(ctx, dupId) {
+  return dupId ? (await ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?select=code&id=eq.${dupId}&limit=1`))?.[0]?.code : '';
+}
+
 async function createOrder(ctx) {
-  const { db, auth, env, now } = ctx;
+  const { db, auth, env } = ctx;
   const b = ctx.body || {};
   if (!branchesFrom(env).includes(b.branch)) throw new ApiError(422, 'เลือกสาขาให้ถูกต้อง');
   let img;
@@ -85,48 +119,70 @@ async function createOrder(ctx) {
   await db.upload(auth.token, BUCKET, path, img.bytes, img.mime);
 
   const status = ocrStatus(env);
-  let x = null; let ocrError = ''; let latency = null; let httpStatus = null; let errCode = null;
-  if (status.provider !== 'none') {
-    const t0 = Date.now();
-    try { x = await runOcr({ image: b.image }, env, ctx.fetchImpl, now); } catch (e) {
-      ocrError = e instanceof OcrError ? e.message : 'อ่านรูปไม่สำเร็จ';
-      httpStatus = e.status || 500; errCode = `http_${httpStatus}`;
-    }
-    latency = Date.now() - t0;
-  }
-
-  let dupId = null;
-  if (x?.billNumber && x.total) {
-    const dup = await db.rest(auth.token, 'GET', `receipt_orders?select=id&bill_number=eq.${encodeURIComponent(x.billNumber)}&total=eq.${encodeURIComponent(x.total)}&limit=1`);
-    dupId = dup?.[0]?.id || null;
-  }
-
-  const needsCheck = !!x && (x.uncertain.length > 0 || x.confidence < 80 || x.docType !== 'order_form' || !!dupId);
-  const ocrFields = x && Object.fromEntries(['billNumber', 'orderDate', 'customerName', 'phone', 'address', 'subDistrict', 'district', 'province', 'postcode', 'shipDate', 'remark', 'total', 'posNumber', 'posTotal', 'items'].map(k => [k, x[k]]));
+  const run = status.provider !== 'none' ? await readImage(ctx, b.image) : { x: null };
+  const { x } = run;
+  const dupId = await findDuplicate(ctx, x);
+  const needsCheck = !!x && needsCheckFor(x, dupId);
   const row = {
     id, branch: b.branch, source: 'upload', sender_name: auth.user.name, image_path: path,
     ocr_status: x ? 'done' : status.provider === 'none' ? 'skipped' : 'failed',
     review_status: status.provider !== 'none' && (!x || needsCheck) ? 'needs_check' : 'needs_review',
-    bill_number: x?.billNumber || '', order_date: x?.orderDate || null, total: x?.total ? Number(x.total) : null,
-    customer_name: x?.customerName || '', phone: x?.phone || '', address: x?.address || '', sub_district: x?.subDistrict || '',
-    district: x?.district || '', province: x?.province || '', postcode: x?.postcode || '', ship_date: x?.shipDate || null, remark: x?.remark || '',
-    pos_number: x?.posNumber || '', pos_total: x?.posTotal ? Number(x.posTotal) : null,
+    ...ocrDataColumns(x),
     ocr_provider: status.provider === 'none' ? null : status.provider, ocr_model: x?.model || null, ocr_confidence: x ? x.confidence : null,
-    ocr_uncertain: x ? x.uncertain : [], ocr_original: ocrFields || null, ocr_raw_text: x?.rawText || null, duplicate_of: dupId, created_by: auth.user.id,
+    ocr_uncertain: x ? x.uncertain : [], ocr_original: x ? Object.fromEntries(OCR_FIELD_KEYS.map(k => [k, x[k]])) : null, ocr_raw_text: x?.rawText || null, duplicate_of: dupId, created_by: auth.user.id,
   };
   const [saved] = await db.rest(auth.token, 'POST', 'receipt_orders', { body: row, prefer: 'return=representation' });
   const items = (x?.items || []).map((i, n) => ({ order_id: id, position: n, product: i.product, size: i.size, color: i.color }));
   if (items.length) await db.rest(auth.token, 'POST', 'receipt_order_items', { body: items });
-  if (status.provider !== 'none') {
-    try {
-      await db.rest(auth.token, 'POST', 'receipt_ocr_runs', { body: { order_id: id, provider: status.provider, model: x?.model || null, ok: !!x, http_status: httpStatus, error_code: errCode, latency_ms: latency } });
-    } catch (e) { console.error('ocr run log failed', e.code || e.status); }
-  }
+  if (status.provider !== 'none') await logOcrRun(ctx, id, status.provider, run);
   await logEvent(ctx, id, 'created', { source: 'upload', ocr: row.ocr_status });
   const urls = await db.sign(auth.token, BUCKET, [path]);
-  const dupCode = dupId ? (await db.rest(auth.token, 'GET', `receipt_orders?select=code&id=eq.${dupId}&limit=1`))?.[0]?.code : '';
-  const order = mapRow({ ...saved, receipt_order_items: items }, urls[path] || '', dupId ? { [dupId]: dupCode } : {});
-  return ok({ order, ocrError }, 201);
+  const order = mapRow({ ...saved, receipt_order_items: items }, urls[path] || '', dupId ? { [dupId]: await dupCodeOf(ctx, dupId) } : {});
+  return ok({ order, ocrError: run.ocrError || '' }, 201);
+}
+
+const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+
+// อ่านรูปใหม่ให้ใบที่ OCR ล้มเหลว/ข้ามไปตอนอัปโหลด — เติมเฉพาะช่องที่ยังว่าง (ไม่ทับสิ่งที่คนพิมพ์ไว้แล้ว)
+async function retryOcr(ctx) {
+  const { db, auth, env } = ctx;
+  const id = asId(ctx.params.id);
+  const version = asVersion(ctx.body?.version);
+  const status = ocrStatus(env);
+  if (status.provider === 'none' || !status.configured) throw new ApiError(503, 'ยังไม่ได้ตั้งค่า OCR ในเซิร์ฟเวอร์');
+  const cur = (await db.rest(auth.token, 'GET', `receipt_orders?${ORDER_SELECT}&id=eq.${id}&limit=1`))?.[0];
+  if (!cur) throw new ApiError(404, 'ไม่พบใบนี้');
+  if (cur.version !== version) throw new ApiError(409, 'ใบนี้ถูกแก้โดยคนอื่นแล้ว กรุณาโหลดใหม่', { code: 'conflict' });
+  if (!['needs_review', 'needs_check'].includes(cur.review_status) || cur.jst_status !== 'none') throw new ApiError(409, 'อ่านรูปใหม่ได้เฉพาะใบที่ยังรอตรวจ', { code: 'locked' });
+  if (!['failed', 'skipped'].includes(cur.ocr_status)) throw new ApiError(409, 'ใบนี้อ่านรูปสำเร็จไปแล้ว', { code: 'conflict' });
+  if (!cur.image_path) throw new ApiError(409, 'ใบนี้ไม่มีรูป');
+
+  const bytes = await db.download(auth.token, BUCKET, cur.image_path);
+  const mime = MIME_BY_EXT[cur.image_path.split('.').pop().toLowerCase()] || 'image/jpeg';
+  const run = await readImage(ctx, `data:${mime};base64,${bytes.toString('base64')}`);
+  await logOcrRun(ctx, id, status.provider, run);
+  await logEvent(ctx, id, 'ocr_retried', { ok: !!run.x });
+  const urls = await db.sign(auth.token, BUCKET, [cur.image_path]);
+  if (!run.x) return ok({ order: mapRow(cur, urls[cur.image_path] || ''), ocrError: run.ocrError });
+
+  const { x } = run;
+  const dupId = await findDuplicate(ctx, x, id);
+  const fill = Object.fromEntries(Object.entries(ocrDataColumns(x)).filter(([k, v]) => v !== '' && v !== null && (cur[k] === '' || cur[k] === null || cur[k] === undefined)));
+  const patch = {
+    ...fill,
+    ocr_status: 'done', ocr_provider: status.provider, ocr_model: x.model || null, ocr_confidence: x.confidence, ocr_uncertain: x.uncertain,
+    ocr_original: Object.fromEntries(OCR_FIELD_KEYS.map(k => [k, x[k]])), ocr_raw_text: x.rawText || null, duplicate_of: dupId,
+    review_status: needsCheckFor(x, dupId) ? 'needs_check' : 'needs_review',
+  };
+  const rows = await db.rest(auth.token, 'PATCH', `receipt_orders?id=eq.${id}&version=eq.${version}&${PENDING}`, { body: patch, prefer: 'return=representation' });
+  if (!rows?.length) throw new ApiError(409, 'ใบนี้ถูกแก้หรือเปลี่ยนสถานะไปแล้ว กรุณาโหลดใหม่', { code: 'conflict' });
+  let items = cur.receipt_order_items || [];
+  if (!items.length && x.items.length) {
+    items = x.items.map((i, n) => ({ order_id: id, position: n, product: i.product, size: i.size, color: i.color }));
+    await db.rest(auth.token, 'POST', 'receipt_order_items', { body: items });
+  }
+  const order = mapRow({ ...rows[0], receipt_order_items: items }, urls[cur.image_path] || '', dupId ? { [dupId]: await dupCodeOf(ctx, dupId) } : {});
+  return ok({ order, ocrError: '', filled: Object.keys(fill).length + (items.length && !cur.receipt_order_items?.length ? 1 : 0) });
 }
 
 async function saveOrder(ctx) {
@@ -198,6 +254,7 @@ const ROUTES = [
   ['POST', /^\/api\/orders$/, createOrder],
   ['PATCH', /^\/api\/orders\/(?<id>[^/]+)$/, saveOrder],
   ['POST', /^\/api\/orders\/(?<id>[^/]+)\/(?<action>confirm|reject|reopen|jst-done)$/, transition],
+  ['POST', /^\/api\/orders\/(?<id>[^/]+)\/ocr$/, retryOcr],
   ['DELETE', /^\/api\/orders\/(?<id>[^/]+)$/, deleteOrder],
 ];
 

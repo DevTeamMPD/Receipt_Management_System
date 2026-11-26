@@ -13,9 +13,13 @@ export function parseJsonLoose(textValue) {
   try { return JSON.parse(s.slice(a, b + 1)); } catch { throw new OcrError('โมเดลตอบกลับในรูปแบบที่อ่านไม่ได้', 502); }
 }
 
+const busyMessage = provider => `${provider} ไม่ว่าง (มีผู้ใช้งานหนาแน่น) เก็บรูปไว้แล้ว กดอ่านรูปใหม่ภายหลัง หรือกรอกข้อมูลจากรูปเอง`;
+const quotaMessage = provider => `โควตา ${provider} เต็มชั่วคราว เก็บรูปไว้แล้ว กดอ่านรูปใหม่ภายหลัง หรือกรอกข้อมูลจากรูปเอง`;
+
 function httpError(provider, status) {
-  if (status === 429) return new OcrError(`โควตา ${provider} เต็มชั่วคราว ลองใหม่ภายหลังหรือให้คนพิมพ์เอง`, 429);
-  if (status === 503) return new OcrError(`${provider} กำลังมีผู้ใช้งานหนาแน่น ลองใหม่อีกครั้งในอีกสักครู่ หรือให้คนพิมพ์เอง`, 503);
+  if (status === 429) return new OcrError(quotaMessage(provider), 429);
+  if (status === 503 || status === 500) return new OcrError(busyMessage(provider), 503);
+  if (status === 404) return new OcrError(`ไม่พบรุ่นโมเดลของ ${provider} ที่ตั้งไว้ (ตรวจ GEMINI_MODELS)`, 404);
   if (status === 401 || status === 403) return new OcrError(`คีย์ ${provider} ไม่ถูกต้องหรือไม่มีสิทธิ์`, 502);
   if (status === 400) return new OcrError(`${provider} ปฏิเสธคำขอ (รูปอาจใหญ่เกินไปหรือรุ่นโมเดลไม่ถูกต้อง)`, 502);
   return new OcrError(`${provider} ตอบกลับผิดพลาด (${status})`, 502);
@@ -43,16 +47,18 @@ function budget(env) {
   const perCall = Number(env.OCR_TIMEOUT_MS ?? total);
   const deadline = Date.now() + total;
   return {
-    signal(provider) {
+    // reserveMs = เวลาที่กันไว้ให้รุ่นถัดไป (รุ่นแรกช้า/ค้าง ต้องไม่กินเวลาจนรุ่นสำรองไม่ได้ลอง)
+    signal(provider, reserveMs = 0) {
       const left = deadline - Date.now();
       if (left < 1000) throw new OcrError(slowMessage(provider), 504);
-      return AbortSignal.timeout(Math.min(perCall, left));
+      const cap = Math.min(perCall, left);
+      return AbortSignal.timeout(Math.max(Math.min(cap, 1000), cap - reserveMs));
     },
     hasTimeFor(ms) { return deadline - Date.now() > ms + 1000; },
   };
 }
-async function fetchWithin(fetchImpl, provider, b, url, init) {
-  try { return await fetchImpl(url, { ...init, signal: b.signal(provider) }); } catch (e) {
+async function fetchWithin(fetchImpl, provider, b, url, init, reserveMs = 0) {
+  try { return await fetchImpl(url, { ...init, signal: b.signal(provider, reserveMs) }); } catch (e) {
     if (e instanceof OcrError) throw e;
     if (e?.name === 'TimeoutError' || e?.name === 'AbortError') throw new OcrError(slowMessage(provider), 504);
     throw new OcrError(`ติดต่อ ${provider} ไม่ได้ (${e?.code || e?.name || 'network'})`, 502);
@@ -66,12 +72,11 @@ function thinkingConfig(env) {
   return level === 'default' ? null : { thinkingLevel: level };
 }
 
-// เรียกครั้งเดียวต่อหนึ่งรุ่น; ถ้า Google ตอบ 503 (ผู้ใช้หนาแน่น) หรือ 500 ลองใหม่สูงสุด 3 ครั้งแบบหน่วงเวลา
+// ยิงรุ่นเดียวครั้งเดียว (ไม่ลองซ้ำรุ่นเดิม — รุ่นที่ไม่ว่างมักไม่ว่างต่อ ข้ามไปรุ่นถัดไปเร็วกว่า)
 // ถ้ารุ่นไม่รองรับการตั้งระดับการคิด (400) ลองใหม่หนึ่งครั้งโดยไม่ส่งค่านั้น
-async function geminiCall(model, { base64, mime }, env, fetchImpl, b) {
-  const delays = [Number(env.OCR_RETRY_DELAY_MS ?? 1000), Number(env.OCR_RETRY_DELAY_MS ?? 1000) * 2.5];
+async function geminiCall(model, { base64, mime }, env, fetchImpl, b, reserveMs) {
   let thinking = thinkingConfig(env);
-  for (let attempt = 0; ; attempt += 1) {
+  for (;;) {
     const t0 = Date.now();
     const res = await fetchWithin(fetchImpl, 'Gemini', b, `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
@@ -85,30 +90,62 @@ async function geminiCall(model, { base64, mime }, env, fetchImpl, b) {
           ...(thinking ? { thinkingConfig: thinking } : {}),
         },
       }),
-    }).catch(e => { console.warn('ocr gemini', JSON.stringify({ model, ms: Date.now() - t0, error: e.status })); throw e; });
+    }, reserveMs).catch(e => { console.warn('ocr gemini', JSON.stringify({ model, ms: Date.now() - t0, error: e.status })); throw e; });
     // บันทึกเฉพาะรุ่น/สถานะ/เวลา (ไม่มีข้อมูลลูกค้า) ไว้ดูใน Vercel logs ว่าช้าหรือล้มที่ขั้นไหน
     console.info('ocr gemini', JSON.stringify({ model, status: res.status, ms: Date.now() - t0, thinking: thinking?.thinkingLevel || 'default' }));
     if (res.ok) return res;
     if (res.status === 400 && thinking) { thinking = null; continue; }
-    if ((res.status === 503 || res.status === 500) && attempt < delays.length && b.hasTimeFor(delays[attempt])) { await sleep(delays[attempt]); continue; }
     throw httpError('Gemini', res.status);
   }
 }
 
+// ลำดับรุ่นที่ลอง: GEMINI_MODELS (คั่นด้วยจุลภาค) ทับทั้งชุดได้ · ไม่ตั้ง = GEMINI_MODEL แล้ว GEMINI_FALLBACK_MODEL
+// Flash-Lite เป็นค่าเริ่มต้น: รุ่น Flash ตัวใหม่มักตอบ 503 (ผู้ใช้หนาแน่น) ส่วน Flash-Lite ตอบใน ~2 วินาที
+export function geminiModels(env) {
+  const list = env.GEMINI_MODELS ? String(env.GEMINI_MODELS).split(',') : [env.GEMINI_MODEL || 'gemini-flash-lite-latest', env.GEMINI_FALLBACK_MODEL];
+  return [...new Set(list.map(m => String(m || '').trim()).filter(Boolean))];
+}
+
+// สถานะที่ "ลองรุ่นอื่นแล้วอาจได้": ไม่ว่าง (503) · โควตาเต็ม (429) · ไม่มีรุ่นนี้ (404) · รอนานเกิน (504)
+const SKIPPABLE = new Set([503, 429, 404, 504]);
+
+// เลือกข้อความที่บอกสาเหตุจริงเมื่อทุกรุ่นล้ม — เคยขึ้น "ตอบช้าเกินไป" ทั้งที่จริงคือทุกรุ่นตอบ 503
+function finalError(errors) {
+  const has = s => errors.some(e => e.status === s);
+  if (has(429)) return new OcrError(quotaMessage('Gemini'), 429);
+  if (has(503)) return new OcrError(busyMessage('Gemini'), 503);
+  return errors[errors.length - 1];
+}
+
 export async function geminiProvider({ base64, mime }, env, fetchImpl = fetch) {
   if (!env.GEMINI_API_KEY) throw new OcrError('ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในเซิร์ฟเวอร์', 503);
-  const models = [env.GEMINI_MODEL || 'gemini-3.8-flash', env.GEMINI_FALLBACK_MODEL].filter(Boolean);
+  const models = geminiModels(env);
   const b = budget(env);
-  let res;
-  let used = models[0];
-  for (const [i, model] of models.entries()) {
-    try { res = await geminiCall(model, { base64, mime }, env, fetchImpl, b); used = model; break; }
-    catch (e) { if (i === models.length - 1 || !(e instanceof OcrError) || ![503, 429, 504].includes(e.status) || !b.hasTimeFor(0)) throw e; /* ลองรุ่นสำรองถ้ายังมีเวลา */ }
+  const errors = [];
+  // ไล่ทุกรุ่นหนึ่งรอบ ถ้าทุกรุ่นแค่ไม่ว่าง/โควตาเต็ม และยังมีเวลา ลองอีกรอบหลังหน่วงสั้น ๆ
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const [i, model] of models.entries()) {
+      if (!b.hasTimeFor(0)) break;
+      // รุ่นที่ไม่ใช่ตัวสุดท้าย: กันเวลาไว้ให้รุ่นสำรอง (ค่าเริ่มต้น 12 วิ — Flash-Lite อ่านใบจริง ~2 วิ)
+      const reserve = i < models.length - 1 ? Number(env.OCR_FALLBACK_RESERVE_MS ?? 12_000) : 0;
+      try {
+        const res = await geminiCall(model, { base64, mime }, env, fetchImpl, b, reserve);
+        const data = await res.json();
+        const out = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
+        if (!out) throw new OcrError('Gemini ไม่ได้ตอบข้อมูลกลับมา (รูปอาจไม่ชัดหรือถูกกรอง)', 502);
+        return { raw: parseJsonLoose(out), rawText: out, model };
+      } catch (e) {
+        if (!(e instanceof OcrError) || !SKIPPABLE.has(e.status)) throw e;
+        errors.push(e);
+      }
+    }
+    // เฉพาะ "ไม่ว่าง" ที่รอแป๊บเดียวแล้วอาจหาย — โควตาเต็ม/ไม่มีรุ่น/ช้าเกิน ลองซ้ำไปก็ไม่ช่วย
+    const retryable = errors.length && errors.every(e => e.status === 503);
+    const delay = Number(env.OCR_RETRY_DELAY_MS ?? 1500);
+    if (pass > 0 || !retryable || !b.hasTimeFor(delay + 5000)) break;
+    await sleep(delay);
   }
-  const data = await res.json();
-  const out = (data?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
-  if (!out) throw new OcrError('Gemini ไม่ได้ตอบข้อมูลกลับมา (รูปอาจไม่ชัดหรือถูกกรอง)', 502);
-  return { raw: parseJsonLoose(out), rawText: out, model: used };
+  throw errors.length ? finalError(errors) : new OcrError(slowMessage('Gemini'), 504);
 }
 
 // Typhoon OCR คืนเป็นข้อความ จึงต้องมีขั้นที่สองเพื่อดึงฟิลด์ (ยังไม่ได้ทดสอบกับ API จริง)
