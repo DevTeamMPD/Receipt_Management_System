@@ -25,5 +25,7 @@ export const api = {
   save: (id, version, fields, items) => call('PATCH', `/api/orders/${id}`, { version, fields, ...(items ? { items } : {}) }),
   remove: (id, version) => call('DELETE', `/api/orders/${id}`, { version }),
   retryOcr: (id, version) => call('POST', `/api/orders/${id}/ocr`, { version }),
+  lineGroups: () => call('GET', '/api/line/groups'),
+  setLineGroupBranch: (groupId, branch) => call('PATCH', `/api/line/groups/${encodeURIComponent(groupId)}`, { branch }),
   act: (id, action, version, extra = {}) => call('POST', `/api/orders/${id}/${action}`, { version, ...extra }),
 };

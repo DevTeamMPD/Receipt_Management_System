@@ -324,3 +324,40 @@ test('renders without JavaScript errors and keeps readable text sizes', async ({
   expect(tiny).toBe(0);
   expect(errors).toEqual([]);
 });
+
+test('LINE groups dialog lists the groups the bot is in and lets an admin map a branch', async ({ page }) => {
+  const api = await installApi(page, { env: { LINE_CHANNEL_SECRET: 's', LINE_CHANNEL_ACCESS_TOKEN: 't' } });
+  api.sb.users['staff@example.com'].role = 'admin';
+  api.sb.db.receipt_line_groups = [
+    { group_id: 'Cmapped', group_name: 'Sales รังสิต', branch: 'รังสิต', active: true, created_at: '2026-11-20T03:00:00Z' },
+    { group_id: 'Cwaiting', group_name: 'ทีมขายใหม่', branch: null, active: true, created_at: '2026-11-24T03:00:00Z' },
+  ];
+  api.sb.db.receipt_line_inbox = [
+    { id: '10000000-0000-4000-8000-000000000001', message_id: 'a', group_id: 'Cmapped', branch: 'รังสิต', status: 'order', attempts: 1, created_at: '2026-11-25T08:00:00Z', updated_at: '2026-11-25T08:00:00Z' },
+    { id: '10000000-0000-4000-8000-000000000002', message_id: 'b', group_id: 'Cwaiting', branch: null, status: 'pending', attempts: 0, created_at: '2026-11-25T09:00:00Z', updated_at: '2026-11-25T09:00:00Z' },
+  ];
+  await page.goto('/');
+  await page.getByRole('button', { name: 'กลุ่ม LINE' }).click();
+  const dlg = page.getByRole('dialog');
+  await expect(dlg.getByRole('heading', { name: 'กลุ่ม LINE ที่บอทอยู่' })).toBeVisible();
+  await expect(dlg.locator('.lg-item')).toHaveCount(2);
+  await expect(dlg.locator('.lg-item').first()).toContainText('ได้ใบ 1');
+  await expect(dlg.locator('.lg-item').nth(1)).toContainText('ยังไม่ผูกสาขา');
+  await expect(dlg.locator('.lg-item').nth(1)).toContainText('รอผูกสาขา 1 รูป');
+  await dlg.getByLabel('สาขาของกลุ่ม ทีมขายใหม่').selectOption('สยาม');
+  await expect(dlg.getByRole('status').filter({ hasText: 'ผูกกับสาขาสยามแล้ว' })).toContainText('กำลังดึงรูปที่รออยู่ 1 รูป');
+  await expect(dlg.locator('.lg-item').nth(1)).toContainText('กำลังรับรูป');
+  expect(api.sb.db.receipt_line_inbox[1].branch).toBe('สยาม');
+});
+
+test('non-admin staff see the LINE groups but cannot change the branch', async ({ page }) => {
+  const api = await installApi(page);
+  api.sb.db.receipt_line_groups = [{ group_id: 'Cwaiting', group_name: 'ทีมขายใหม่', branch: null, active: true, created_at: '2026-11-24T03:00:00Z' }];
+  await page.goto('/');
+  await page.getByRole('button', { name: 'กลุ่ม LINE' }).click();
+  const dlg = page.getByRole('dialog');
+  await expect(dlg.locator('.lg-item')).toContainText('ยังไม่ผูกสาขา');
+  await expect(dlg.getByRole('combobox')).toHaveCount(0);
+  await expect(dlg).toContainText('ผูกกลุ่มกับสาขาได้เฉพาะผู้ดูแล');
+  await expect(dlg).toContainText('ยังไม่ได้ตั้งค่า LINE');
+});
