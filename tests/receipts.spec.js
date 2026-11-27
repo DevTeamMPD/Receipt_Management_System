@@ -344,10 +344,43 @@ test('LINE groups dialog lists the groups the bot is in and lets an admin map a 
   await expect(dlg.locator('.lg-item').first()).toContainText('ได้ใบ 1');
   await expect(dlg.locator('.lg-item').nth(1)).toContainText('ยังไม่ผูกสาขา');
   await expect(dlg.locator('.lg-item').nth(1)).toContainText('รอผูกสาขา 1 รูป');
-  await dlg.getByLabel('สาขาของกลุ่ม ทีมขายใหม่').selectOption('สยาม');
+  // ค้นหา/กรองเฉพาะกลุ่มที่ยังไม่ผูก
+  await dlg.getByRole('button', { name: /ยังไม่ผูกสาขา 1/ }).click();
+  await expect(dlg.locator('.lg-item')).toHaveCount(1);
+  await dlg.getByRole('button', { name: /ทั้งหมด 2/ }).click();
+  await dlg.getByLabel('ค้นหากลุ่มหรือสาขา').fill('รังสิต');
+  await expect(dlg.locator('.lg-item')).toHaveCount(1);
+  await dlg.getByLabel('ค้นหากลุ่มหรือสาขา').fill('');
+  await dlg.getByLabel('สาขาของกลุ่ม ทีมขายใหม่').fill('สยาม');
+  await dlg.locator('.lg-item').nth(1).getByRole('button', { name: 'ผูก', exact: true }).click();
   await expect(dlg.getByRole('status').filter({ hasText: 'ผูกกับสาขาสยามแล้ว' })).toContainText('กำลังดึงรูปที่รออยู่ 1 รูป');
   await expect(dlg.locator('.lg-item').nth(1)).toContainText('กำลังรับรูป');
   expect(api.sb.db.receipt_line_inbox[1].branch).toBe('สยาม');
+});
+
+test('an admin pastes a branch list; groups named after a branch are mapped, and the new branches show up in the app', async ({ page }) => {
+  const api = await installApi(page, { env: { LINE_CHANNEL_SECRET: 's', LINE_CHANNEL_ACCESS_TOKEN: 't' } });
+  api.sb.users['staff@example.com'].role = 'admin';
+  api.sb.db.receipt_branches = ['สยาม', 'ลาดพร้าว', 'บางนา', 'รังสิต'].map(name => ({ name, active: true }));
+  api.sb.db.receipt_line_groups = [
+    { group_id: 'Cseacon', group_name: 'Sales ซีคอนสแควร์', branch: null, active: true, created_at: '2026-11-24T03:00:00Z' },
+    { group_id: 'Cother', group_name: 'ทีมขายรวม', branch: null, active: true, created_at: '2026-11-24T04:00:00Z' },
+  ];
+  await page.goto('/');
+  await page.getByRole('button', { name: 'กลุ่ม LINE' }).click();
+  const dlg = page.getByRole('dialog');
+  await dlg.getByText(/สาขาทั้งหมด 4 สาขา/).click();
+  await dlg.getByRole('textbox', { name: /วางรายชื่อ/ }).fill('ซีคอนสแควร์\nเมกา บางนา\nสยาม');
+  await dlg.getByRole('button', { name: 'เพิ่มสาขา', exact: true }).click();
+  await expect(dlg.getByRole('status').filter({ hasText: 'เพิ่ม 2 สาขา' })).toContainText('ผูกกลุ่มจากชื่อกลุ่มให้ 1 กลุ่ม');
+  await expect(dlg.locator('.lg-item').first()).toContainText('กำลังรับรูป');
+  await expect(dlg.getByLabel('สาขาของกลุ่ม Sales ซีคอนสแควร์')).toHaveValue('ซีคอนสแควร์');
+  // ชื่อสาขาใหม่ตอนผูก: ปุ่มบอกว่าจะเพิ่มสาขา
+  await dlg.getByLabel('สาขาของกลุ่ม ทีมขายรวม').fill('ทีมขายรวม');
+  await dlg.locator('.lg-item').nth(1).getByRole('button', { name: 'เพิ่มสาขานี้และผูก' }).click();
+  await expect(dlg.getByRole('status').filter({ hasText: 'เพิ่มสาขาทีมขายรวม และผูก' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByLabel('กรองสาขา').locator('option', { hasText: 'เมกา บางนา' })).toHaveCount(1);
 });
 
 test('non-admin staff see the LINE groups but cannot change the branch', async ({ page }) => {
@@ -358,6 +391,7 @@ test('non-admin staff see the LINE groups but cannot change the branch', async (
   const dlg = page.getByRole('dialog');
   await expect(dlg.locator('.lg-item')).toContainText('ยังไม่ผูกสาขา');
   await expect(dlg.getByRole('combobox')).toHaveCount(0);
-  await expect(dlg).toContainText('ผูกกลุ่มกับสาขาได้เฉพาะผู้ดูแล');
+  await expect(dlg).toContainText('ผูกกลุ่มกับสาขาและเพิ่มสาขาได้เฉพาะผู้ดูแล');
+  await expect(dlg.getByText(/สาขาทั้งหมด/)).toHaveCount(0);
   await expect(dlg).toContainText('ยังไม่ได้ตั้งค่า LINE');
 });

@@ -73,7 +73,10 @@ export function fakeSupabase() {
           return res(200, hit);
         }
       }
-      const KEYS = { receipt_line_groups: 'group_id', receipt_line_inbox: 'message_id' };
+      // ตารางสาขายังไม่ถูกสร้าง (ก่อนรัน migration) จนกว่าเทสต์จะตั้ง db.receipt_branches
+      if (t === 'receipt_branches' && !db.receipt_branches) return res(404, { code: 'PGRST205', message: 'Could not find the table' });
+      if (t === 'receipt_branches' && method !== 'GET' && usr.role !== 'admin') return res(403, { code: '42501', message: 'row-level security' });
+      const KEYS = { receipt_line_groups: 'group_id', receipt_line_inbox: 'message_id', receipt_branches: 'name' };
       if (KEYS[t]) {
         const rows = (db[t] ||= []);
         if (method === 'GET') return res(200, rows.filter(r => matches(r, u.searchParams)));
@@ -83,7 +86,7 @@ export function fakeSupabase() {
             if (rows.some(x => x[KEYS[t]] === r[KEYS[t]])) continue;
             const row = t === 'receipt_line_inbox'
               ? { id: `10000000-0000-4000-8000-${String(rows.length + 1).padStart(12, '0')}`, status: 'pending', attempts: 0, image_path: null, sender_name: null, order_id: null, last_error: null, created_at: NOW.toISOString(), updated_at: NOW.toISOString(), ...r }
-              : { active: true, branch: null, group_name: '', ...r };
+              : t === 'receipt_branches' ? { active: true, ...r } : { active: true, branch: null, group_name: '', ...r };
             rows.push(row); out.push(row);
           }
           return res(201, out);

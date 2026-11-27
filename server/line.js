@@ -44,9 +44,12 @@ export function lineClient(env, fetchImpl = fetch) {
   };
 }
 
-// จับคู่กลุ่มกับสาขาจากชื่อกลุ่ม (เช่น "Sales บางนา" → บางนา) — ไม่เจอหรือเจอหลายสาขา = ยังไม่ผูก ให้ผู้ดูแลตั้งเอง
+// จับคู่กลุ่มกับสาขาจากชื่อกลุ่ม (เช่น "Sales บางนา" → บางนา) — ไม่สนเว้นวรรค/ตัวพิมพ์ · ถ้าเจอหลายชื่อแต่ชื่อหนึ่งครอบชื่ออื่น
+// (เช่น "เซ็นทรัล พระราม 2" ครอบ "พระราม 2") ใช้ชื่อที่ยาวกว่า · ไม่เจอหรือยังกำกวม = ยังไม่ผูก ให้ผู้ดูแลตั้งเอง
+const squash = v => String(v || '').toLowerCase().replace(/\s+/g, '');
 export function branchFromGroupName(name, branches) {
-  const n = String(name || '');
-  const hits = branches.filter(b => b && n.includes(b));
-  return hits.length === 1 ? hits[0] : null;
+  const n = squash(name);
+  const hits = [...new Set(branches)].filter(b => squash(b) && n.includes(squash(b)));
+  const top = hits.filter(h => !hits.some(o => o !== h && squash(o).includes(squash(h))));
+  return top.length === 1 ? top[0] : null;
 }

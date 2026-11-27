@@ -2,6 +2,21 @@ import { ApiError } from './supabase.js';
 
 const DEFAULT_BRANCHES = ['สยาม', 'ลาดพร้าว', 'บางนา', 'รังสิต'];
 export const branchesFrom = env => (env.RECEIPT_BRANCHES ? env.RECEIPT_BRANCHES.split(',').map(s => s.trim()).filter(Boolean) : DEFAULT_BRANCHES);
+export const sortBranches = list => [...new Set(list)].sort((a, b) => a.localeCompare(b, 'th'));
+export const BRANCH_MAX = 60;
+export const cleanBranchName = v => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
+
+// สาขาที่เปิดใช้ (ตาราง receipt_branches) — ยังไม่มีตาราง/ยังว่าง/อ่านไม่ได้ = ใช้ค่าจาก env แทน
+export async function loadBranches(db, token, env) {
+  try {
+    const rows = await db.rest(token, 'GET', 'receipt_branches?select=name&active=eq.true');
+    if (rows?.length) return sortBranches(rows.map(r => r.name));
+  } catch (e) {
+    if (e.status === 401) throw e;
+    if (e.code !== 'PGRST205' && e.code !== '42P01') console.warn('branches load failed', e.code || e.status);
+  }
+  return branchesFrom(env);
+}
 
 const isRealDate = iso => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);

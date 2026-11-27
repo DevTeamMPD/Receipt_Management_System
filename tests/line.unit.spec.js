@@ -186,3 +186,53 @@ test('the dev server routes /api/line/webhook to the LINE handler with the raw b
   expect(res.status()).toBe(503);
   expect((await request.get('/api/cron/line-inbox')).status()).toBe(401);
 });
+
+test('group names match a branch ignoring spaces/case, and the longer branch name wins when one contains another', () => {
+  const b = ['พระราม 2', 'เซ็นทรัล พระราม 2', 'Mega บางนา', 'บางนา'];
+  expect(branchFromGroupName('Sales เซ็นทรัลพระราม 2', b)).toBe('เซ็นทรัล พระราม 2');
+  expect(branchFromGroupName('ทีม mega  บางนา', b)).toBe('Mega บางนา');
+  expect(branchFromGroupName('สาขาพระราม 2 ใหม่', b)).toBe('พระราม 2');
+  expect(branchFromGroupName('บางนา + พระราม 2', b)).toBe(null);
+});
+
+test('branches live in the database: an admin pastes a list, groups named after a branch are mapped and their waiting photos pulled', async () => {
+  const w = world({ groups: { G1: 'Sales บางนา', G2: 'ทีมขาย ซีคอน', G3: 'เมกา + ซีคอน' } });
+  await post(w, [imageEvent('w1', 'G2'), imageEvent('w2', 'G3')]);
+  const tasks = [];
+  let cookie = '';
+  const call = async (method, path, body) => {
+    const out = await handle({ method, path, headers: { 'content-type': 'application/json', host: 'app.test', ...(cookie ? { cookie } : {}) }, body, env, fetchImpl: w.fetchImpl, now: NOW, defer: p => tasks.push(p) });
+    const set = out.cookies.find(c => c.startsWith('rd_session='));
+    if (set) cookie = set.split(';')[0];
+    return out;
+  };
+  const login = await call('POST', '/api/auth/login', { email: 'staff@example.com', password: 'pw' });
+  expect(login.body.branches).toEqual(expect.arrayContaining(['บางนา', 'สยาม'])); // ยังไม่มีตาราง → ใช้ค่าเริ่มต้น
+  // ยังไม่มีตาราง: พนักงานทั่วไปถูกห้าม · admin ได้คำอธิบายว่าต้องอัปเดตฐานข้อมูล
+  expect((await call('POST', '/api/branches', { names: ['ซีคอน'] })).status).toBe(403);
+  w.sb.users['staff@example.com'].role = 'admin';
+  expect((await call('POST', '/api/branches', { names: ['ซีคอน'] })).status).toBe(503);
+
+  w.sb.db.receipt_branches = ['สยาม', 'ลาดพร้าว', 'บางนา', 'รังสิต'].map(name => ({ name, active: true }));
+  expect((await call('POST', '/api/branches', { names: [] })).status).toBe(422);
+  const out = await call('POST', '/api/branches', { names: ['  ซีคอน ', 'เมกา', 'ซีคอน', 'บางนา'] });
+  expect(out.status).toBe(200);
+  expect(out.body.added).toEqual(['ซีคอน', 'เมกา'].sort((a, b) => a.localeCompare(b, 'th')));
+  expect(out.body.branches).toEqual(expect.arrayContaining(['ซีคอน', 'เมกา', 'สยาม']));
+  expect(out.body.autoMapped).toEqual([{ id: 'G2', branch: 'ซีคอน' }]); // G3 มีสองสาขาในชื่อ = กำกวม ไม่ผูก
+  expect(out.body.queued).toBe(1);
+  await Promise.all(tasks);
+  expect(w.sb.db.orders).toEqual([expect.objectContaining({ branch: 'ซีคอน', source: 'line' })]);
+  expect(w.sb.db.receipt_line_groups.find(g => g.group_id === 'G3').branch).toBe(null);
+
+  // พิมพ์ชื่อสาขาใหม่ตอนผูกกลุ่ม: ต้องยืนยันว่าจะสร้าง
+  expect((await call('PATCH', '/api/line/groups/G3', { branch: 'เมกาบางนา' })).body.code).toBe('unknown_branch');
+  const made = await call('PATCH', '/api/line/groups/G3', { branch: 'เมกาบางนา', create: true });
+  expect(made.body).toMatchObject({ created: true, group: { branch: 'เมกาบางนา' } });
+  expect(made.body.branches).toContain('เมกาบางนา');
+  // อัปโหลดใบด้วยสาขาจากฐานข้อมูลได้ · ซ่อนสาขาแล้วหายจากตัวเลือก
+  expect((await call('GET', '/api/auth/me')).body.branches).toContain('ซีคอน');
+  const hide = await call('PATCH', `/api/branches/${encodeURIComponent('เมกา')}`, { active: false });
+  expect(hide.body.branches).not.toContain('เมกา');
+  expect((await call('PATCH', `/api/branches/${encodeURIComponent('ไม่มี')}`, { active: false })).status).toBe(404);
+});

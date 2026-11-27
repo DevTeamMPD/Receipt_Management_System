@@ -516,7 +516,7 @@ export default function App() {
     {dialog && <dialog ref={dialogRef} className={`modal modal-${dialog.type}`} onCancel={() => setDialog(null)} onClick={e => { if (e.target === dialogRef.current) setDialog(null); }} aria-labelledby="modal-title">
       <div className="modal-header"><h2 id="modal-title">{{ image: `รูปต้นฉบับ · ${current?.code}`, ocr: 'ข้อความ OCR ดิบ', confirm: 'ยืนยันข้อมูลถูกต้อง', upload: 'อัปโหลดใบสั่งซื้อ', reject: 'ปฏิเสธใบนี้', delete: 'ลบใบนี้?', help: 'วิธีใช้งาน', line: 'กลุ่ม LINE ที่บอทอยู่' }[dialog.type]}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
       {dialog.type === 'upload' && <UploadForm branches={branches} defaultBranch={branch === 'all' ? branches[0] : branch} ocr={auth.ocr} onDone={onUploaded} />}
-      {dialog.type === 'line' && <LineGroups branches={branches} onAuthError={handleAuthError} />}
+      {dialog.type === 'line' && <LineGroups onBranchesChange={b => setAuth(a => ({ ...a, branches: b }))} onAuthError={handleAuthError} />}
       {dialog.type === 'reject' && <RejectForm onSubmit={reason => act('reject', { reason })} />}
       {dialog.type === 'delete' && (() => { const d = orders.find(x => x.id === dialog.id); return d ? <>
         <p className="modal-desc">ใช้เมื่อระบบดึงใบมาผิดหรืออัปโหลดผิดรูป ใบและรูปจะถูกลบ แต่ประวัติการกระทำยังอยู่</p>
