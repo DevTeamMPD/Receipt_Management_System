@@ -251,4 +251,8 @@ test('branches live in the database: an admin pastes a list, groups named after 
   const hide = await call('PATCH', `/api/branches/${encodeURIComponent('เมกา')}`, { active: false });
   expect(hide.body.branches).not.toContain('เมกา');
   expect((await call('PATCH', `/api/branches/${encodeURIComponent('ไม่มี')}`, { active: false })).status).toBe(404);
+  // ซ่อนครบทุกสาขา = ไม่มีสาขาเลย (ไม่ย้อนกลับไปใช้ 4 สาขาเริ่มต้น)
+  for (const b of w.sb.db.receipt_branches.filter(r => r.active)) await call('PATCH', `/api/branches/${encodeURIComponent(b.name)}`, { active: false });
+  expect((await call('GET', '/api/auth/me')).body.branches).toEqual([]);
+  expect((await call('POST', '/api/branches', { names: ['ซีคอน'] })).body.branches).toEqual(['ซีคอน']); // เพิ่มชื่อเดิม = แสดงกลับ
 });

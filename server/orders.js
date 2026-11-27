@@ -6,11 +6,12 @@ export const sortBranches = list => [...new Set(list)].sort((a, b) => a.localeCo
 export const BRANCH_MAX = 60;
 export const cleanBranchName = v => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
 
-// สาขาที่เปิดใช้ (ตาราง receipt_branches) — ยังไม่มีตาราง/ยังว่าง/อ่านไม่ได้ = ใช้ค่าจาก env แทน
+// สาขาที่เปิดใช้ (ตาราง receipt_branches) — ยังไม่มีตาราง/ตารางยังไม่มีสักแถว/อ่านไม่ได้ = ใช้ค่าจาก env แทน
+// (ซ่อนครบทุกสาขา = ไม่มีสาขา ไม่ถอยกลับไปใช้ค่าเริ่มต้น ไม่งั้นสาขาที่ผู้ดูแลซ่อนจะโผล่กลับมา)
 export async function loadBranches(db, token, env) {
   try {
-    const rows = await db.rest(token, 'GET', 'receipt_branches?select=name&active=eq.true');
-    if (rows?.length) return sortBranches(rows.map(r => r.name));
+    const rows = await db.rest(token, 'GET', 'receipt_branches?select=name,active');
+    if (rows?.length) return sortBranches(rows.filter(r => r.active).map(r => r.name));
   } catch (e) {
     if (e.status === 401) throw e;
     if (e.code !== 'PGRST205' && e.code !== '42P01') console.warn('branches load failed', e.code || e.status);
