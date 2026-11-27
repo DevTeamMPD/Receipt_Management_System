@@ -395,3 +395,15 @@ test('non-admin staff see the LINE groups but cannot change the branch', async (
   await expect(dlg.getByText(/สาขาทั้งหมด/)).toHaveCount(0);
   await expect(dlg).toContainText('ยังไม่ได้ตั้งค่า LINE');
 });
+
+test('when every branch is hidden, the upload form says to add branches first instead of offering the old defaults', async ({ page }) => {
+  const api = await installApi(page);
+  api.sb.db.receipt_branches = ['สยาม', 'ลาดพร้าว'].map(name => ({ name, active: false }));
+  await page.goto('/');
+  await expect(page.getByLabel('กรองสาขา').locator('option')).toHaveCount(1); // เหลือแค่ "ทุกสาขา"
+  await page.getByRole('button', { name: 'อัปโหลดใบสั่งซื้อ' }).click();
+  const dlg = page.getByRole('dialog');
+  await expect(dlg).toContainText('ยังไม่มีสาขาในระบบ');
+  await dlg.getByLabel('รูปใบสั่งซื้อ').setInputFiles({ name: 'order.png', mimeType: 'image/png', buffer: PNG });
+  await expect(dlg.getByRole('button', { name: /อัปโหลดและอ่านใบสั่งซื้อ/ })).toBeDisabled();
+});

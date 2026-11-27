@@ -103,13 +103,15 @@ function UploadForm({ branches, defaultBranch, ocr, onDone }) {
   return <>
     <p className="modal-desc">เลือกรูปถ่ายใบสั่งซื้อ (JPG / PNG) ระบบจะเก็บรูปและอ่านข้อมูลให้ แล้วคุณตรวจและแก้ก่อนยืนยัน</p>
     <div className="field"><label htmlFor={fileId}>รูปใบสั่งซื้อ</label><input id={fileId} type="file" accept="image/*" disabled={busy} onChange={e => { setFile(e.target.files?.[0] || null); setError(''); }} /></div>
-    <div className="field upload-gap"><label htmlFor={branchId}>สาขาที่ส่งมา</label><select id={branchId} value={branch} disabled={busy} onChange={e => setBranch(e.target.value)}>{branches.map(b => <option key={b} value={b}>{b}</option>)}</select></div>
+    {branches.length
+      ? <div className="field upload-gap"><label htmlFor={branchId}>สาขาที่ส่งมา</label><select id={branchId} value={branch} disabled={busy} onChange={e => setBranch(e.target.value)}>{branches.map(b => <option key={b} value={b}>{b}</option>)}</select></div>
+      : <div className="banner warn upload-gap"><TriangleAlert size={18} aria-hidden="true" />ยังไม่มีสาขาในระบบ — ให้ผู้ดูแลเพิ่มสาขาที่ปุ่ม "กลุ่ม LINE" ก่อน</div>}
     {ocr.provider === 'none' && <div className="notice">ยังไม่ได้ตั้งค่า OCR ในระบบ — ระบบจะเก็บรูปไว้ แล้วให้คุณกรอกข้อมูลเอง</div>}
     {ocr.provider !== 'none' && !ocr.configured && <div className="banner bad"><TriangleAlert size={18} aria-hidden="true" />ยังไม่ได้ใส่คีย์ของ {ocr.provider} ในเซิร์ฟเวอร์ — ระบบจะเก็บรูปไว้โดยไม่อ่านอัตโนมัติ</div>}
     {ocr.demo && <div className="notice">โหมดสาธิต: ระบบ <strong>ไม่ได้อ่านรูปจริง</strong> จะสร้างข้อมูลสมมติ (ใช้ตอนพัฒนาเท่านั้น)</div>}
     {ocr.configured && !ocr.demo && <div className="notice">รูปจะถูกส่งไปที่ <strong>{ocr.provider}</strong> เพื่ออ่านข้อมูล ใบสั่งซื้อมีข้อมูลลูกค้า ส่งเฉพาะรูปที่ตั้งใจให้อ่าน</div>}
     {error && <div className="banner bad" role="alert"><TriangleAlert size={18} aria-hidden="true" />{error}</div>}
-    <div className="modal-actions"><button className="btn primary" disabled={!file || busy} aria-busy={busy} onClick={start}>{busy ? 'กำลังอ่านรูป…' : <><Upload size={18} aria-hidden="true" />อัปโหลดและอ่านใบสั่งซื้อ</>}</button></div>
+    <div className="modal-actions"><button className="btn primary" disabled={!file || busy || !branch} aria-busy={busy} onClick={start}>{busy ? 'กำลังอ่านรูป…' : <><Upload size={18} aria-hidden="true" />อัปโหลดและอ่านใบสั่งซื้อ</>}</button></div>
   </>;
 }
 

@@ -83,7 +83,8 @@ export function fakeSupabase() {
         if (method === 'POST') {
           const out = [];
           for (const r of [].concat(body)) {
-            if (rows.some(x => x[KEYS[t]] === r[KEYS[t]])) continue;
+            const dup = rows.find(x => x[KEYS[t]] === r[KEYS[t]]);
+            if (dup) { if (String(init.headers?.prefer || '').includes('merge-duplicates')) { Object.assign(dup, r); out.push(dup); } continue; }
             const row = t === 'receipt_line_inbox'
               ? { id: `10000000-0000-4000-8000-${String(rows.length + 1).padStart(12, '0')}`, status: 'pending', attempts: 0, image_path: null, sender_name: null, order_id: null, last_error: null, created_at: NOW.toISOString(), updated_at: NOW.toISOString(), ...r }
               : t === 'receipt_branches' ? { active: true, ...r } : { active: true, branch: null, group_name: '', ...r };
