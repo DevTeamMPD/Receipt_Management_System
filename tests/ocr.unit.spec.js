@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { parseDateText, parseAmount, parsePhone, normalizeExtraction } from '../server/ocr/normalize.js';
-import { geminiModels, geminiProvider, typhoonProvider, parseJsonLoose, OcrError } from '../server/ocr/providers.js';
+import { geminiModels, geminiProvider, typhoonProvider, parseJsonLoose, OcrError, fixTyphoonFields } from '../server/ocr/providers.js';
 import { runOcr, ocrStatus } from '../server/ocr/handler.js';
 
 const NOW = new Date('2026-11-25T00:00:00Z');
@@ -309,4 +309,71 @@ test('only a Bebeplay order-form header counts for LINE intake', async () => {
   expect(f('ใบสั่งซื้อสินค้า ร้านอื่น')).toBe(false);
   expect(f('ใบส่งซื้อสินค้า Bebeplay', 'receipt_only')).toBe(false);
   expect(isBebeplayOrderForm(null)).toBe(false);
+});
+
+test('Typhoon structuring asks for JSON; Thai docType and a dropped brand are fixed from the OCR text', async () => {
+  const calls = [];
+  const ocr = '<p>ใบส่งซื้อสินค้า</p><p>bebeplay</p> เลขที่ OD-1 ...';
+  const f = fakeFetch([{ json: { choices: [{ message: { content: ocr } }] } }, { json: { choices: [{ message: { content: JSON.stringify({ ...good, docType: 'ใบส่งซื้อสินค้า', formTitle: 'ใบส่งซื้อสินค้า' }) } }] } }], calls);
+  const out = await typhoonProvider({ dataUrl: png }, { TYPHOON_API_KEY: 'tk' }, f);
+  expect(calls[1].body.response_format).toEqual({ type: 'json_object' });
+  expect(out.raw.docType).toBe('order_form');
+  expect(out.raw.formTitle).toBe('ใบส่งซื้อสินค้า Bebeplay');
+  const { isBebeplayOrderForm } = await import('../server/ocr/normalize.js');
+  expect(isBebeplayOrderForm(normalizeExtraction(out.raw, NOW))).toBe(true);
+  // ไม่มีชื่อแบรนด์บนหัวกระดาษ = ไม่เติมให้ (ตัวกรอง LINE ต้องทิ้งได้เหมือนเดิม)
+  expect(fixTyphoonFields({ docType: 'order_form', formTitle: 'ใบสั่งซื้อสินค้า' }, 'ใบสั่งซื้อสินค้า ร้านอื่น').formTitle).toBe('ใบสั่งซื้อสินค้า');
+  expect(fixTyphoonFields({ docType: 'ใบเสร็จรับเงิน' }, 'ใบเสร็จรับเงิน 7-11').docType).toBe('receipt_only');
+  expect(fixTyphoonFields({ docType: 'something' }, 'hello').docType).toBe('other');
+  expect(fixTyphoonFields({ docType: 'order_form', formTitle: 'Central x Bebeplay ใบส่งซื้อสินค้า' }, 'ใบส่งซื้อสินค้า bebeplay').formTitle).toBe('Central x Bebeplay ใบส่งซื้อสินค้า');
+});
+
+test('when Gemini fails, Typhoon answers in the same request and handwriting is flagged for checking', async () => {
+  const typhoonOk = [{ json: { choices: [{ message: { content: 'ใบส่งซื้อสินค้า Bebeplay OD-1' } }] } }, { json: { choices: [{ message: { content: JSON.stringify(good) } }] } }];
+  const env = { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g', TYPHOON_API_KEY: 't', OCR_RETRY_DELAY_MS: '0' };
+  expect(ocrStatus(env).backup).toBe('typhoon');
+  expect(ocrStatus({ ...env, OCR_BACKUP: 'none' }).backup).toBe(null);
+  expect(ocrStatus({ OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g' }).backup).toBe(null);
+  const calls = [];
+  const out = await runOcr({ image: png }, env, fakeFetch([{ status: 429 }, ...typhoonOk], calls), NOW);
+  expect(calls.map(c => new URL(c.url).hostname)).toEqual(['generativelanguage.googleapis.com', 'api.opentyphoon.ai', 'api.opentyphoon.ai']);
+  expect(out).toMatchObject({ provider: 'typhoon', fallback: true, billNumber: 'OD-1' });
+  expect(out.uncertain).toEqual(expect.arrayContaining(['customerName', 'phone']));
+  // Gemini ตอบได้ = ไม่แตะ Typhoon
+  const calls2 = [];
+  const viaGemini = await runOcr({ image: png }, env, fakeFetch([{ json: { candidates: [{ content: { parts: [{ text: JSON.stringify(good) }] } }] } }], calls2), NOW);
+  expect(viaGemini.provider).toBe('gemini');
+  expect(calls2).toHaveLength(1);
+  // ทั้งคู่ล้ม = บอกสาเหตุของ Gemini
+  await expect(runOcr({ image: png }, env, fakeFetch([{ status: 429 }, { status: 503 }]), NOW)).rejects.toMatchObject({ status: 429 });
+  // รูปผิดประเภทไม่ถูกส่งต่อ
+  await expect(runOcr({ image: 'data:text/plain;base64,QUJD' }, env, fakeFetch([]), NOW)).rejects.toMatchObject({ status: 400 });
+});
+
+test('a slow Gemini still leaves time for Typhoon inside the shared budget', async () => {
+  const f = (url, init) => {
+    if (url.includes('googleapis')) return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+    const content = url && init.body.includes('image_url') ? 'ใบส่งซื้อสินค้า Bebeplay' : JSON.stringify(good);
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content } }] }) });
+  };
+  const t0 = Date.now();
+  const out = await runOcr({ image: png }, { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g', TYPHOON_API_KEY: 't', OCR_BUDGET_MS: '8000', OCR_BACKUP_RESERVE_MS: '6000' }, f, NOW);
+  expect(out.provider).toBe('typhoon');
+  expect(Date.now() - t0).toBeLessThan(4000);
+});
+
+test('the admin-picked reader overrides OCR_PROVIDER; unknown, keyless or missing settings fall back to the env', async () => {
+  const { loadOcrChoice, applyOcrSetting } = await import('../server/ocrSetting.js');
+  const env = { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g', TYPHOON_API_KEY: 't' };
+  const dbWith = value => ({ rest: async () => (value === undefined ? [] : [{ value }]) });
+  expect(await loadOcrChoice(dbWith('typhoon'), 'tk', env)).toBe('typhoon');
+  expect(await loadOcrChoice(dbWith('mock'), 'tk', env)).toBe(null);
+  expect(await loadOcrChoice(dbWith('typhoon'), 'tk', { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g' })).toBe(null);
+  expect(await loadOcrChoice(dbWith(undefined), 'tk', env)).toBe(null);
+  const missing = { rest: async () => { throw Object.assign(new Error('x'), { code: 'PGRST205', status: 404 }); } };
+  expect(await loadOcrChoice(missing, 'tk', env)).toBe(null);
+  const ctx = { db: dbWith('typhoon'), env, auth: { token: 'tk' } };
+  await applyOcrSetting(ctx);
+  expect(ocrStatus(ctx.env)).toMatchObject({ provider: 'typhoon', backup: 'gemini', configured: true });
+  expect(ocrStatus(env)).toMatchObject({ provider: 'gemini', backup: 'typhoon', available: { gemini: true, typhoon: true } });
 });

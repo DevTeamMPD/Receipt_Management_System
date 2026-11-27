@@ -13,7 +13,7 @@
 
 - เบราว์เซอร์ไม่คุยกับฐานข้อมูลโดยตรง และไม่มีคีย์ใด ๆ — ล็อกอินแล้วได้คุกกี้ HttpOnly
 - API ใช้ **สิทธิ์ของผู้ใช้ที่ล็อกอิน** ติดต่อ Supabase (ไม่ใช้คีย์ service role) และฐานข้อมูลตรวจสิทธิ์ซ้ำด้วย RLS: ใช้ได้เฉพาะคนที่อยู่ในตาราง `receipt_users` และเปิดใช้งานอยู่
-- ตารางทั้งหมดขึ้นต้นด้วย `receipt_` (SQL อยู่ใน `db/` — รันตามลำดับ `receipt_desk_schema_v1.sql`, `receipt_desk_access_v1.sql`, `receipt_desk_delete_v1.sql`, `receipt_desk_delete_v2.sql`, `receipt_desk_line_v1.sql`, `receipt_desk_line_v2.sql`, `receipt_desk_branches_v1.sql`)
+- ตารางทั้งหมดขึ้นต้นด้วย `receipt_` (SQL อยู่ใน `db/` — รันตามลำดับ `receipt_desk_schema_v1.sql`, `receipt_desk_access_v1.sql`, `receipt_desk_delete_v1.sql`, `receipt_desk_delete_v2.sql`, `receipt_desk_line_v1.sql`, `receipt_desk_line_v2.sql`, `receipt_desk_branches_v1.sql`, `receipt_desk_settings_v1.sql`)
 
 ## สถานะใบสั่งซื้อ
 
@@ -39,7 +39,9 @@
    | `SUPABASE_ANON_KEY` | publishable (anon) key — เป็นคีย์สาธารณะ ใช้ร่วมกับ token ของผู้ใช้เท่านั้น |
    | `OCR_PROVIDER` | `gemini` / `typhoon` — ไม่ตั้ง = ไม่ใช้ OCR (เก็บรูปแล้วกรอกเอง) |
    | `GEMINI_API_KEY`, `GEMINI_MODELS` (หรือ `GEMINI_MODEL` + `GEMINI_FALLBACK_MODEL`), `OCR_FALLBACK_RESERVE_MS` | ลำดับรุ่นที่ลอง — รุ่นที่ไม่ว่าง/โควตาเต็มถูกข้ามทันที ดู `.env.example` |
-   | `TYPHOON_API_KEY` | ถ้าใช้ Typhoon |
+   | `TYPHOON_API_KEY` | ถ้าใช้ Typhoon — ถ้าตัวหลักเป็น Gemini และตั้งคีย์นี้ไว้ Typhoon จะเป็นตัวสำรองอัตโนมัติเมื่อ Gemini ล้ม (ไม่ว่าง/โควตาเต็ม/ช้า) |
+   | `OCR_PROVIDER` | ตัวอ่านเริ่มต้นจากเซิร์ฟเวอร์ — ผู้ดูแลเปลี่ยนได้ในหน้าเว็บ (ปุ่มฟันเฟือง "ตั้งค่า OCR" · ตาราง `receipt_settings`) ค่าในหน้าเว็บทับค่านี้ |
+   | `OCR_BACKUP`, `OCR_BACKUP_RESERVE_MS` | `none` = ปิดตัวสำรอง · เวลาที่กันไว้ให้ตัวสำรองจากงบรวม (ค่าเริ่มต้น 20 วิ) |
    | `OCR_BUDGET_MS`, `OCR_TIMEOUT_MS` | เวลารอโมเดลรวมทั้งหมด / เพดานต่อคำขอ (ค่าเริ่มต้น 48 วิ / เท่ากับงบรวม) — ถ้าเกิน ระบบเก็บรูปไว้แล้วให้กรอกเอง |
 | `GEMINI_THINKING_LEVEL` | ระดับการคิดของ Gemini (ค่าเริ่มต้น `low` เพื่อให้ตอบเร็ว; `default` = ใช้ค่าของรุ่น) |
    | `RECEIPT_BRANCHES` | รายชื่อสาขา คั่นด้วยจุลภาค (ค่าเริ่มต้น สยาม,ลาดพร้าว,บางนา,รังสิต) |

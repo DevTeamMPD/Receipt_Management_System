@@ -40,7 +40,7 @@ export async function findDuplicate(ctx, x, excludeId) {
 }
 export async function logOcrRun(ctx, orderId, provider, r) {
   try {
-    await ctx.db.rest(ctx.auth.token, 'POST', 'receipt_ocr_runs', { body: { order_id: orderId, provider, model: r.x?.model || null, ok: !!r.x, http_status: r.httpStatus || null, error_code: r.errCode || null, latency_ms: r.latency } });
+    await ctx.db.rest(ctx.auth.token, 'POST', 'receipt_ocr_runs', { body: { order_id: orderId, provider: r.x?.provider || provider, model: r.x?.model || null, ok: !!r.x, http_status: r.httpStatus || null, error_code: r.errCode || null, latency_ms: r.latency } });
   } catch (e) { console.error('ocr run log failed', e.code || e.status); }
 }
 export async function dupCodeOf(ctx, dupId) {
@@ -62,7 +62,7 @@ export async function insertOrder(ctx, { bytes, mime, imagePath, branch, source,
     ocr_status: x ? 'done' : run ? 'failed' : 'skipped',
     review_status: run && (!x || needsCheck) ? 'needs_check' : 'needs_review',
     ...ocrDataColumns(x),
-    ocr_provider: run ? status.provider : null, ocr_model: x?.model || null, ocr_confidence: x ? x.confidence : null,
+    ocr_provider: run ? (x?.provider || status.provider) : null, ocr_model: x?.model || null, ocr_confidence: x ? x.confidence : null,
     ocr_uncertain: x ? x.uncertain : [], ocr_original: x ? Object.fromEntries(OCR_FIELD_KEYS.map(k => [k, x[k]])) : null, ocr_raw_text: x?.rawText || null, duplicate_of: dupId, created_by: auth.user.id,
   };
   const [saved] = await db.rest(auth.token, 'POST', 'receipt_orders', { body: row, prefer: 'return=representation' });

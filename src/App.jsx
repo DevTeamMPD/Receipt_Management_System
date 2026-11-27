@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, LogOut, Maximize2, MessageCircle, MessagesSquare, Monitor, Plus, RefreshCw, Search, Send, Smartphone, TriangleAlert, Trash2, Upload, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, LogOut, Maximize2, MessageCircle, MessagesSquare, Monitor, Plus, RefreshCw, Search, Send, Settings, Smartphone, TriangleAlert, Trash2, Upload, X } from 'lucide-react';
 import { api, ApiError } from './api.js';
 import { prepareImage } from './ocrClient.js';
 import ImageViewer from './ImageViewer.jsx';
 import LineGroups from './LineGroups.jsx';
+import OcrSettings from './OcrSettings.jsx';
 import { formatReceived, isPending, monthNames, money, statusLabels, thaiDate } from './data.js';
 import { validate, warnings, fieldOrder } from './validation.js';
 
@@ -109,7 +110,7 @@ function UploadForm({ branches, defaultBranch, ocr, onDone }) {
     {ocr.provider === 'none' && <div className="notice">ยังไม่ได้ตั้งค่า OCR ในระบบ — ระบบจะเก็บรูปไว้ แล้วให้คุณกรอกข้อมูลเอง</div>}
     {ocr.provider !== 'none' && !ocr.configured && <div className="banner bad"><TriangleAlert size={18} aria-hidden="true" />ยังไม่ได้ใส่คีย์ของ {ocr.provider} ในเซิร์ฟเวอร์ — ระบบจะเก็บรูปไว้โดยไม่อ่านอัตโนมัติ</div>}
     {ocr.demo && <div className="notice">โหมดสาธิต: ระบบ <strong>ไม่ได้อ่านรูปจริง</strong> จะสร้างข้อมูลสมมติ (ใช้ตอนพัฒนาเท่านั้น)</div>}
-    {ocr.configured && !ocr.demo && <div className="notice">รูปจะถูกส่งไปที่ <strong>{ocr.provider}</strong> เพื่ออ่านข้อมูล ใบสั่งซื้อมีข้อมูลลูกค้า ส่งเฉพาะรูปที่ตั้งใจให้อ่าน</div>}
+    {ocr.configured && !ocr.demo && <div className="notice">รูปจะถูกส่งไปที่ <strong>{ocr.provider}</strong>{ocr.backup && <> (สำรอง: <strong>{ocr.backup}</strong>)</>} เพื่ออ่านข้อมูล ใบสั่งซื้อมีข้อมูลลูกค้า ส่งเฉพาะรูปที่ตั้งใจให้อ่าน</div>}
     {error && <div className="banner bad" role="alert"><TriangleAlert size={18} aria-hidden="true" />{error}</div>}
     <div className="modal-actions"><button className="btn primary" disabled={!file || busy || !branch} aria-busy={busy} onClick={start}>{busy ? 'กำลังอ่านรูป…' : <><Upload size={18} aria-hidden="true" />อัปโหลดและอ่านใบสั่งซื้อ</>}</button></div>
   </>;
@@ -357,6 +358,7 @@ export default function App() {
           <button className="btn ghost line-btn" aria-label="กลุ่ม LINE" title="กลุ่ม LINE ที่บอทอยู่" onClick={() => setDialog({ type: 'line' })}><MessagesSquare size={18} aria-hidden="true" /><span className="lbl-long">กลุ่ม LINE</span></button>
           <button className="btn ghost" onClick={() => setDialog({ type: 'help' })}><CircleHelp size={18} aria-hidden="true" />วิธีใช้</button>
           <button className="btn primary" aria-label="อัปโหลดใบสั่งซื้อ" onClick={() => setDialog({ type: 'upload' })}><Upload size={18} aria-hidden="true" /><span className="lbl-long">อัปโหลดใบสั่งซื้อ</span><span className="lbl-short">อัปโหลด</span></button>
+          {auth.user.role === 'admin' && <button className="icon-btn" aria-label="ตั้งค่า OCR" title="ตั้งค่าตัวอ่าน OCR" onClick={() => setDialog({ type: 'settings' })}><Settings size={20} /></button>}
           <span className="user-name" title={auth.user.email}>{auth.user.name}</span>
           <button className="icon-btn" aria-label="ออกจากระบบ" title="ออกจากระบบ" onClick={logout}><LogOut size={20} /></button>
         </div>
@@ -516,9 +518,10 @@ export default function App() {
     {toast && <div className="toast" role="status"><Check size={18} aria-hidden="true" />{toast}<button aria-label="ปิดข้อความ" onClick={() => setToast('')}><X size={16} /></button></div>}
 
     {dialog && <dialog ref={dialogRef} className={`modal modal-${dialog.type}`} onCancel={() => setDialog(null)} onClick={e => { if (e.target === dialogRef.current) setDialog(null); }} aria-labelledby="modal-title">
-      <div className="modal-header"><h2 id="modal-title">{{ image: `รูปต้นฉบับ · ${current?.code}`, ocr: 'ข้อความ OCR ดิบ', confirm: 'ยืนยันข้อมูลถูกต้อง', upload: 'อัปโหลดใบสั่งซื้อ', reject: 'ปฏิเสธใบนี้', delete: 'ลบใบนี้?', help: 'วิธีใช้งาน', line: 'กลุ่ม LINE ที่บอทอยู่' }[dialog.type]}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
+      <div className="modal-header"><h2 id="modal-title">{{ image: `รูปต้นฉบับ · ${current?.code}`, ocr: 'ข้อความ OCR ดิบ', confirm: 'ยืนยันข้อมูลถูกต้อง', upload: 'อัปโหลดใบสั่งซื้อ', reject: 'ปฏิเสธใบนี้', delete: 'ลบใบนี้?', help: 'วิธีใช้งาน', line: 'กลุ่ม LINE ที่บอทอยู่', settings: 'ตั้งค่าตัวอ่าน OCR' }[dialog.type]}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
       {dialog.type === 'upload' && <UploadForm branches={branches} defaultBranch={branch === 'all' ? branches[0] : branch} ocr={auth.ocr} onDone={onUploaded} />}
       {dialog.type === 'line' && <LineGroups onBranchesChange={b => setAuth(a => ({ ...a, branches: b }))} onAuthError={handleAuthError} />}
+      {dialog.type === 'settings' && <OcrSettings ocr={auth.ocr} onSaved={ocr => setAuth(a => ({ ...a, ocr }))} onAuthError={handleAuthError} />}
       {dialog.type === 'reject' && <RejectForm onSubmit={reason => act('reject', { reason })} />}
       {dialog.type === 'delete' && (() => { const d = orders.find(x => x.id === dialog.id); return d ? <>
         <p className="modal-desc">ใช้เมื่อระบบดึงใบมาผิดหรืออัปโหลดผิดรูป ใบและรูปจะถูกลบ แต่ประวัติการกระทำยังอยู่</p>

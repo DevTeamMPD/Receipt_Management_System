@@ -407,3 +407,41 @@ test('when every branch is hidden, the upload form says to add branches first in
   await dlg.getByLabel('รูปใบสั่งซื้อ').setInputFiles({ name: 'order.png', mimeType: 'image/png', buffer: PNG });
   await expect(dlg.getByRole('button', { name: /อัปโหลดและอ่านใบสั่งซื้อ/ })).toBeDisabled();
 });
+
+test('an admin picks the default OCR reader; the other becomes the backup and the upload form says so', async ({ page }) => {
+  const api = await installApi(page, { env: { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g', TYPHOON_API_KEY: 't' } });
+  api.sb.users['staff@example.com'].role = 'admin';
+  api.sb.db.receipt_settings = [];
+  await page.goto('/');
+  await page.getByRole('button', { name: 'ตั้งค่า OCR' }).click();
+  const dlg = page.getByRole('dialog');
+  await expect(dlg.getByRole('radio', { name: /Gemini/ })).toBeChecked();
+  await expect(dlg).toContainText('สำรอง: Typhoon');
+  await expect(dlg).toContainText('ตอนนี้ใช้ค่าเริ่มต้นจากเซิร์ฟเวอร์');
+  await dlg.getByRole('radio', { name: /Typhoon/ }).check();
+  await dlg.getByRole('button', { name: 'บันทึก' }).click();
+  await expect(dlg).toContainText('บันทึกแล้ว');
+  expect(api.sb.db.receipt_settings).toEqual([expect.objectContaining({ key: 'ocr_provider', value: 'typhoon' })]);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'อัปโหลดใบสั่งซื้อ' }).click();
+  await expect(page.getByRole('dialog')).toContainText('รูปจะถูกส่งไปที่ typhoon (สำรอง: gemini)');
+  await page.keyboard.press('Escape');
+  // ค่าที่เลือกอยู่ในฐานข้อมูล — เปิดใหม่ยังเป็น Typhoon
+  await page.reload();
+  await page.getByRole('button', { name: 'ตั้งค่า OCR' }).click();
+  await expect(page.getByRole('dialog').getByRole('radio', { name: /Typhoon/ })).toBeChecked();
+});
+
+test('a reader without a key cannot be picked, and staff do not see the OCR setting', async ({ page }) => {
+  const api = await installApi(page, { env: { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g' } });
+  api.sb.users['staff@example.com'].role = 'admin';
+  await page.goto('/');
+  await page.getByRole('button', { name: 'ตั้งค่า OCR' }).click();
+  const dlg = page.getByRole('dialog');
+  await expect(dlg.getByRole('radio', { name: /Typhoon/ })).toBeDisabled();
+  await expect(dlg).toContainText('ไม่มีตัวสำรอง');
+  api.sb.users['staff@example.com'].role = 'office_sales';
+  await page.reload();
+  await expect(page.locator('.order-list')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'ตั้งค่า OCR' })).toHaveCount(0);
+});
