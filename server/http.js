@@ -50,7 +50,7 @@ export function nodeHandler(env) {
       }
       let body;
       if (req.method !== 'GET') body = await readJson(req);
-      const out = await handle({ method: req.method, path: url.pathname, headers: req.headers, body, env });
+      const out = await handle({ method: req.method, path: url.pathname, headers: req.headers, body, env, defer });
       send(out.status, out.body, out.cookies);
     } catch (e) {
       send(e.status === 413 ? 413 : 400, { error: e.status === 413 ? 'ข้อมูลใหญ่เกินไป' : 'ข้อมูลที่ส่งมาไม่ถูกต้อง' });

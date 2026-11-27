@@ -5,7 +5,8 @@ import { ORDER_SELECT, branchesFrom, mapRow, sanitizeItems, sanitizePatch } from
 import { BUCKET, OCR_FIELD_KEYS, dupCodeOf, findDuplicate, insertOrder, logEvent, logOcrRun, needsCheckFor, ocrDataColumns, readImage } from './orderCreate.js';
 import { validate } from '../src/validation.js';
 import { timingSafeEqual } from 'node:crypto';
-import { processDueInbox } from './lineIngest.js';
+import { MAX_ATTEMPTS, claimWaitingForGroup, processDueInbox, processNow } from './lineIngest.js';
+import { lineClient, lineConfigured } from './line.js';
 
 const EDIT_LOG_WINDOW_MS = 5 * 60 * 1000;
 const PENDING = 'review_status=in.(needs_review,needs_check)&jst_status=eq.none';
@@ -191,6 +192,55 @@ async function lineInboxCron(ctx) {
   return ok(await processDueInbox({ env: ctx.env, fetchImpl: ctx.fetchImpl, now: ctx.now }));
 }
 
+// ---- กลุ่ม LINE ที่บอทอยู่ (ดูได้ทุกคน · ผูกสาขาได้เฉพาะ admin)
+const LINE_STATS_DAYS = 30;
+const PROCESS_NOW = 3;
+const asGroupId = id => { if (!/^[A-Za-z0-9]{1,64}$/.test(id)) throw new ApiError(404, 'ไม่พบกลุ่มนี้'); return id; };
+
+function groupView(g, inbox) {
+  const mine = inbox.filter(r => r.group_id === g.group_id);
+  const count = fn => mine.filter(fn).length;
+  return {
+    id: g.group_id, name: g.group_name || '', branch: g.branch || null, active: g.active !== false, addedAt: g.created_at || null,
+    stats: {
+      orders: count(r => r.status === 'order'),
+      ignored: count(r => r.status === 'ignored'),
+      waiting: count(r => !r.branch && r.status === 'pending'),
+      working: count(r => r.branch && (['pending', 'processing'].includes(r.status) || (r.status === 'failed' && r.attempts < MAX_ATTEMPTS))),
+      failed: count(r => r.status === 'failed' && r.attempts >= MAX_ATTEMPTS),
+    },
+    lastPhotoAt: mine.reduce((m, r) => (!m || r.created_at > m ? r.created_at : m), null),
+  };
+}
+
+async function lineGroups(ctx) {
+  const { db, auth, now } = ctx;
+  const since = new Date(now.getTime() - LINE_STATS_DAYS * 86_400_000).toISOString();
+  const [groups, inbox] = await Promise.all([
+    db.rest(auth.token, 'GET', 'receipt_line_groups?select=group_id,group_name,branch,active,created_at&order=created_at.asc'),
+    db.rest(auth.token, 'GET', `receipt_line_inbox?select=group_id,status,branch,attempts,created_at&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=5000`),
+  ]);
+  return ok({ groups: (groups || []).map(g => groupView(g, inbox || [])), canEdit: auth.user.role === 'admin', lineConfigured: lineConfigured(ctx.env), statsDays: LINE_STATS_DAYS });
+}
+
+async function setLineGroup(ctx) {
+  const { db, auth, env } = ctx;
+  if (auth.user.role !== 'admin') throw new ApiError(403, 'ผูกกลุ่มกับสาขาได้เฉพาะผู้ดูแล (admin)');
+  const id = asGroupId(ctx.params.groupId);
+  const branch = ctx.body?.branch ?? null;
+  if (branch !== null && !branchesFrom(env).includes(branch)) throw new ApiError(422, 'เลือกสาขาให้ถูกต้อง');
+  const patch = { branch };
+  if (lineConfigured(env)) { const name = await lineClient(env, ctx.fetchImpl).groupName(id); if (name) patch.group_name = name; } // ชื่อกลุ่มล่าสุดจาก LINE
+  const rows = await db.rest(auth.token, 'PATCH', `receipt_line_groups?group_id=eq.${encodeURIComponent(id)}`, { body: patch, prefer: 'return=representation' });
+  if (!rows?.length) throw new ApiError(404, 'ไม่พบกลุ่มนี้');
+  const ids = branch ? await claimWaitingForGroup(ctx, id, branch) : [];
+  if (ids.length && ctx.defer) ctx.defer(processNow({ env, fetchImpl: ctx.fetchImpl, now: ctx.now, ids: ids.slice(0, PROCESS_NOW) }));
+  console.info('line group mapped', JSON.stringify({ group: id.slice(-6), branch, queued: ids.length }));
+  const since = new Date(ctx.now.getTime() - LINE_STATS_DAYS * 86_400_000).toISOString();
+  const inbox = await db.rest(auth.token, 'GET', `receipt_line_inbox?select=group_id,status,branch,attempts,created_at&group_id=eq.${encodeURIComponent(id)}&created_at=gte.${encodeURIComponent(since)}&limit=5000`);
+  return ok({ group: groupView(rows[0], inbox || []), queued: ids.length });
+}
+
 const ROUTES = [
   ['GET', /^\/api\/cron\/line-inbox$/, lineInboxCron, { public: true }],
   ['POST', /^\/api\/auth\/login$/, login, { public: true }],
@@ -202,6 +252,8 @@ const ROUTES = [
   ['POST', /^\/api\/orders\/(?<id>[^/]+)\/(?<action>confirm|reject|reopen|jst-done)$/, transition],
   ['POST', /^\/api\/orders\/(?<id>[^/]+)\/ocr$/, retryOcr],
   ['DELETE', /^\/api\/orders\/(?<id>[^/]+)$/, deleteOrder],
+  ['GET', /^\/api\/line\/groups$/, lineGroups],
+  ['PATCH', /^\/api\/line\/groups\/(?<groupId>[^/]+)$/, setLineGroup],
 ];
 
 function sameOrigin(headers) {
@@ -210,7 +262,7 @@ function sameOrigin(headers) {
 }
 
 // รับคำขอที่ไม่ผูกกับเฟรมเวิร์ก คืน { status, body, cookies } — ใช้ร่วมกันทั้ง Vite (dev) และ Vercel (ใช้งานจริง)
-export async function handle({ method, path, headers = {}, body, env, fetchImpl = fetch, now = new Date() }) {
+export async function handle({ method, path, headers = {}, body, env, fetchImpl = fetch, now = new Date(), defer = null }) {
   const cookies = [];
   const secure = env.COOKIE_SECURE ? env.COOKIE_SECURE === '1' : headers['x-forwarded-proto'] === 'https';
   try {
@@ -224,7 +276,7 @@ export async function handle({ method, path, headers = {}, body, env, fetchImpl 
       if (!sameOrigin(headers)) throw new ApiError(403, 'คำขอไม่ได้มาจากหน้าเว็บของระบบ');
       if (!String(headers['content-type'] || '').includes('application/json')) throw new ApiError(415, 'ต้องส่งเป็น JSON');
     }
-    const ctx = { req: { headers }, env, now, fetchImpl, secure, params: hit.params, body, cookies, auth: null };
+    const ctx = { req: { headers }, env, now, fetchImpl, secure, params: hit.params, body, cookies, auth: null, defer };
     let dbInstance; // สร้างเมื่อใช้งานจริง เพื่อให้คำขอที่ไม่ได้ล็อกอินได้ 401 ก่อน แม้ยังไม่ได้ตั้งค่า Supabase
     Object.defineProperty(ctx, 'db', { get: () => (dbInstance ||= supabase(env, fetchImpl)) });
     if (!hit.opts.public) ctx.auth = await authenticate(ctx);

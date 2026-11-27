@@ -18,7 +18,11 @@ export function fakeSupabase() {
   const issue = (u, expSec = FUTURE) => { const a = jwt(u.id, expSec); const r = `r-${u.id}-${Object.keys(refreshTokens).length}`; tokens[a] = u; refreshTokens[r] = u; return { access_token: a, refresh_token: r, user: { id: u.id } }; };
   const res = (status, json) => ({ ok: status < 400, status, text: async () => (json === undefined ? '' : JSON.stringify(json)) });
   const matches = (row, params) => [...params].every(([k, v]) => {
-    if (['select', 'order', 'limit', 'receipt_order_items.order'].includes(k) || !(k in row)) return true;
+    if (['select', 'order', 'limit', 'receipt_order_items.order'].includes(k)) return true;
+    if (v === 'is.null') return row[k] == null;
+    if (v === 'not.is.null') return row[k] != null;
+    if (!(k in row)) return true;
+    if (v.startsWith('gte.')) return String(row[k]) >= v.slice(4);
     if (v.startsWith('eq.')) return String(row[k]) === v.slice(3);
     if (v.startsWith('neq.')) return String(row[k]) !== v.slice(4);
     if (v.startsWith('in.(')) return v.slice(4, -1).split(',').includes(String(row[k]));
@@ -47,7 +51,7 @@ export function fakeSupabase() {
       if (!usr) return res(401, { code: 'PGRST301', message: 'JWT expired' });
       const t = u.pathname.replace('/rest/v1/', '');
       if (!usr.allowed) return t === 'receipt_users' ? res(200, []) : res(200, []);
-      if (t === 'receipt_users') return res(200, [{ user_id: usr.id, email: 'staff@example.com', display_name: 'พนักงาน', role: 'office_sales', active: true }]);
+      if (t === 'receipt_users') return res(200, [{ user_id: usr.id, email: 'staff@example.com', display_name: 'พนักงาน', role: usr.role || 'office_sales', active: true }]);
       if (t === 'receipt_orders') {
         if (method === 'GET') { const rows = db.orders.filter(o => matches(o, u.searchParams)).map(withItems); return res(200, u.searchParams.has('id') || u.searchParams.has('bill_number') ? rows : rows.slice().reverse()); }
         if (method === 'POST') {

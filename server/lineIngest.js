@@ -28,7 +28,7 @@ async function serviceAuth(env, db, now) {
   return auth;
 }
 
-async function serviceContext({ env, fetchImpl, now }) {
+export async function serviceContext({ env, fetchImpl, now }) {
   const db = supabase(env, fetchImpl);
   return { env, fetchImpl, now, db, auth: await serviceAuth(env, db, now), line: lineClient(env, fetchImpl) };
 }
@@ -63,12 +63,13 @@ export async function handleLineWebhook({ rawBody, headers = {}, env, fetchImpl 
       const m = ev.message;
       if (ev.type !== 'message' || m?.type !== 'image' || (m.contentProvider?.type && m.contentProvider.type !== 'line')) continue;
       const group = await ensureGroup(ctx, groupId);
-      if (!group.active || !group.branch) continue; // ยังไม่ผูกสาขา — ไม่รับรูป (ไม่เก็บรูปลูกค้าที่ยังไม่รู้ว่าเป็นของสาขาไหน)
+      if (!group.active) continue;
+      // ยังไม่ผูกสาขา: จดไว้แค่รหัสข้อความ (ยังไม่โหลดรูปลูกค้า) — ผูกสาขาเมื่อไหร่ค่อยดึงรูปจาก LINE (claimWaitingForGroup)
       const inserted = await ctx.db.rest(ctx.auth.token, 'POST', 'receipt_line_inbox', {
-        body: { message_id: String(m.id), group_id: groupId, branch: group.branch, sender_user_id: ev.source.userId || null, sent_at: Number.isFinite(ev.timestamp) ? new Date(ev.timestamp).toISOString() : null },
+        body: { message_id: String(m.id), group_id: groupId, branch: group.branch || null, sender_user_id: ev.source.userId || null, sent_at: Number.isFinite(ev.timestamp) ? new Date(ev.timestamp).toISOString() : null },
         prefer: 'resolution=ignore-duplicates,return=representation',
       });
-      if (inserted?.[0]) queued.push(inserted[0].id); // ไม่มีแถว = LINE ส่ง webhook ซ้ำ รับไปแล้ว
+      if (inserted?.[0] && group.branch) queued.push(inserted[0].id); // ไม่มีแถว = LINE ส่ง webhook ซ้ำ รับไปแล้ว
     } catch (e) { console.error('line event failed', ev?.type, e.code || e.status || e.message); }
   }
   if (queued.length) defer(Promise.allSettled(queued.map(id => processInboxItem(ctx, id))));
@@ -82,6 +83,7 @@ export async function processInboxItem(ctx, id) {
   const { db, auth, line, now } = ctx;
   const row = (await db.rest(auth.token, 'GET', `receipt_line_inbox?select=*&id=eq.${id}&limit=1`))?.[0];
   if (!row) return 'missing';
+  if (!row.branch) return 'waiting'; // กลุ่มยังไม่ผูกสาขา
   const age = now.getTime() - new Date(row.updated_at || row.created_at || now).getTime();
   const eligible = (row.status === 'pending') || (row.status === 'failed' && row.attempts < MAX_ATTEMPTS) || (row.status === 'processing' && age > STUCK_AFTER_MS);
   if (!eligible) return 'skipped';
@@ -144,7 +146,20 @@ export async function processDueInbox({ env, fetchImpl = fetch, now = new Date()
   const retryBefore = new Date(now.getTime() - RETRY_AFTER_MS).toISOString();
   const stuckBefore = new Date(now.getTime() - STUCK_AFTER_MS).toISOString();
   const filter = `or=(and(status.in.(pending,failed),attempts.lt.${MAX_ATTEMPTS},updated_at.lt.${retryBefore}),and(status.eq.processing,updated_at.lt.${stuckBefore}))`;
-  const rows = await ctx.db.rest(ctx.auth.token, 'GET', `receipt_line_inbox?select=id&${filter}&order=created_at.asc&limit=${limit}`);
+  const rows = await ctx.db.rest(ctx.auth.token, 'GET', `receipt_line_inbox?select=id&branch=not.is.null&${filter}&order=created_at.asc&limit=${limit}`);
   const results = await Promise.all((rows || []).map(r => processInboxItem(ctx, r.id)));
   return { processed: results.length, results };
+}
+
+// ผูกกลุ่มกับสาขาแล้ว: รูปที่ส่งมาตอนยังไม่ผูก (จดไว้แค่รหัสข้อความ) ย้ายเข้าสาขานั้น — คืน id ของแถวที่พร้อมดึง
+export async function claimWaitingForGroup(ctx, groupId, branch) {
+  const rows = await ctx.db.rest(ctx.auth.token, 'PATCH', `receipt_line_inbox?group_id=eq.${encodeURIComponent(groupId)}&branch=is.null&status=eq.pending`, { body: { branch }, prefer: 'return=representation' });
+  return (rows || []).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).map(r => r.id);
+}
+
+// ดึงรูปที่ค้างทันทีด้วยบัญชีระบบของ LINE (ที่เหลือ cron เก็บต่อทีละ 2 รูป/5 นาที)
+export async function processNow({ env, fetchImpl = fetch, now = new Date(), ids }) {
+  if (!ids.length || !lineConfigured(env)) return [];
+  const ctx = await serviceContext({ env, fetchImpl, now });
+  return Promise.all(ids.map(id => processInboxItem(ctx, id)));
 }

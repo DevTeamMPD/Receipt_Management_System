@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, LogOut, Maximize2, MessageCircle, Monitor, Plus, RefreshCw, Search, Send, Smartphone, TriangleAlert, Trash2, Upload, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, CircleHelp, FileText, LogOut, Maximize2, MessageCircle, MessagesSquare, Monitor, Plus, RefreshCw, Search, Send, Smartphone, TriangleAlert, Trash2, Upload, X } from 'lucide-react';
 import { api, ApiError } from './api.js';
 import { prepareImage } from './ocrClient.js';
 import ImageViewer from './ImageViewer.jsx';
+import LineGroups from './LineGroups.jsx';
 import { formatReceived, isPending, monthNames, money, statusLabels, thaiDate } from './data.js';
 import { validate, warnings, fieldOrder } from './validation.js';
 
@@ -351,6 +352,7 @@ export default function App() {
         </div>
         <div className="top-actions">
           <button className="btn ghost layout-toggle" aria-label="มุมมองมือถือ" aria-pressed={phone} onClick={toggleLayout} title={phone ? 'กดเพื่อกลับเป็นแบบเดสก์ท็อป' : 'กดเพื่อดูแบบมือถือ'}>{phone ? <Monitor size={18} aria-hidden="true" /> : <Smartphone size={18} aria-hidden="true" />}<span className="lbl">{phone ? 'เดสก์ท็อป' : 'มือถือ'}</span></button>
+          <button className="btn ghost line-btn" aria-label="กลุ่ม LINE" title="กลุ่ม LINE ที่บอทอยู่" onClick={() => setDialog({ type: 'line' })}><MessagesSquare size={18} aria-hidden="true" /><span className="lbl-long">กลุ่ม LINE</span></button>
           <button className="btn ghost" onClick={() => setDialog({ type: 'help' })}><CircleHelp size={18} aria-hidden="true" />วิธีใช้</button>
           <button className="btn primary" aria-label="อัปโหลดใบสั่งซื้อ" onClick={() => setDialog({ type: 'upload' })}><Upload size={18} aria-hidden="true" /><span className="lbl-long">อัปโหลดใบสั่งซื้อ</span><span className="lbl-short">อัปโหลด</span></button>
           <span className="user-name" title={auth.user.email}>{auth.user.name}</span>
@@ -512,8 +514,9 @@ export default function App() {
     {toast && <div className="toast" role="status"><Check size={18} aria-hidden="true" />{toast}<button aria-label="ปิดข้อความ" onClick={() => setToast('')}><X size={16} /></button></div>}
 
     {dialog && <dialog ref={dialogRef} className={`modal modal-${dialog.type}`} onCancel={() => setDialog(null)} onClick={e => { if (e.target === dialogRef.current) setDialog(null); }} aria-labelledby="modal-title">
-      <div className="modal-header"><h2 id="modal-title">{{ image: `รูปต้นฉบับ · ${current?.code}`, ocr: 'ข้อความ OCR ดิบ', confirm: 'ยืนยันข้อมูลถูกต้อง', upload: 'อัปโหลดใบสั่งซื้อ', reject: 'ปฏิเสธใบนี้', delete: 'ลบใบนี้?', help: 'วิธีใช้งาน' }[dialog.type]}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
+      <div className="modal-header"><h2 id="modal-title">{{ image: `รูปต้นฉบับ · ${current?.code}`, ocr: 'ข้อความ OCR ดิบ', confirm: 'ยืนยันข้อมูลถูกต้อง', upload: 'อัปโหลดใบสั่งซื้อ', reject: 'ปฏิเสธใบนี้', delete: 'ลบใบนี้?', help: 'วิธีใช้งาน', line: 'กลุ่ม LINE ที่บอทอยู่' }[dialog.type]}</h2><button className="icon-btn" aria-label="ปิด" onClick={() => setDialog(null)}><X size={20} /></button></div>
       {dialog.type === 'upload' && <UploadForm branches={branches} defaultBranch={branch === 'all' ? branches[0] : branch} ocr={auth.ocr} onDone={onUploaded} />}
+      {dialog.type === 'line' && <LineGroups branches={branches} onAuthError={handleAuthError} />}
       {dialog.type === 'reject' && <RejectForm onSubmit={reason => act('reject', { reason })} />}
       {dialog.type === 'delete' && (() => { const d = orders.find(x => x.id === dialog.id); return d ? <>
         <p className="modal-desc">ใช้เมื่อระบบดึงใบมาผิดหรืออัปโหลดผิดรูป ใบและรูปจะถูกลบ แต่ประวัติการกระทำยังอยู่</p>

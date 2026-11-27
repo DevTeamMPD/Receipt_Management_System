@@ -122,18 +122,55 @@ test('when OCR is busy the photo is retried by cron, and after the last try it s
   expect(w.sb.db.orders).toHaveLength(1);
 });
 
-test('photos from a group not tied to a branch are not taken; joining records the group', async () => {
+test('a group not tied to a branch: photos are noted (message id only, no download) until someone maps the group', async () => {
   const w = world();
   await post(w, [{ type: 'join', timestamp: NOW.getTime(), source: { type: 'group', groupId: 'G1' } }, imageEvent('m4', 'G2')]);
   expect(w.sb.db.receipt_line_groups).toEqual([
     expect.objectContaining({ group_id: 'G1', group_name: 'Sales บางนา', branch: 'บางนา' }),
     expect.objectContaining({ group_id: 'G2', group_name: 'ทีมขาย', branch: null }),
   ]);
-  expect(w.sb.db.receipt_line_inbox || []).toHaveLength(0);
+  expect(w.sb.db.receipt_line_inbox).toEqual([expect.objectContaining({ message_id: 'm4', group_id: 'G2', branch: null, status: 'pending', image_path: null })]);
   expect(w.state.lineCalls.some(u => u.includes('api-data'))).toBe(false);
+  expect(w.sb.db.orders).toHaveLength(0);
+  // cron ไม่แตะรูปที่ยังไม่ผูกสาขา
+  expect((await processDueInbox({ env, fetchImpl: w.fetchImpl, now: new Date(NOW.getTime() + 10 * 60_000) })).processed).toBe(0);
   // ไม่ใช่กลุ่ม (แชทส่วนตัว) / ไม่ใช่รูป → ไม่สนใจ
   await post(w, [{ ...imageEvent('m5'), source: { type: 'user', userId: 'U1' } }, { ...imageEvent('m6'), message: { id: 'm6', type: 'text', text: 'hi' } }]);
-  expect(w.sb.db.receipt_line_inbox || []).toHaveLength(0);
+  expect(w.sb.db.receipt_line_inbox).toHaveLength(1);
+});
+
+test('LINE groups page: everyone sees the groups; only an admin maps a branch, which then pulls the waiting photos', async () => {
+  const w = world();
+  await post(w, [imageEvent('m1', 'G1'), imageEvent('w1', 'G2'), imageEvent('w2', 'G2')]);
+  const tasks = [];
+  let cookie = '';
+  const call = async (method, path, body) => {
+    const out = await handle({ method, path, headers: { 'content-type': 'application/json', host: 'app.test', ...(cookie ? { cookie } : {}) }, body, env, fetchImpl: w.fetchImpl, now: NOW, defer: p => tasks.push(p) });
+    const set = out.cookies.find(c => c.startsWith('rd_session='));
+    if (set) cookie = set.split(';')[0];
+    return out;
+  };
+  expect((await call('GET', '/api/line/groups')).status).toBe(401);
+  await call('POST', '/api/auth/login', { email: 'staff@example.com', password: 'pw' });
+  const list = await call('GET', '/api/line/groups');
+  expect(list.body).toMatchObject({ canEdit: false, lineConfigured: true, statsDays: 30 });
+  expect(list.body.groups).toEqual([
+    expect.objectContaining({ id: 'G1', name: 'Sales บางนา', branch: 'บางนา', active: true, stats: expect.objectContaining({ orders: 1, waiting: 0 }) }),
+    expect.objectContaining({ id: 'G2', name: 'ทีมขาย', branch: null, stats: expect.objectContaining({ orders: 0, waiting: 2 }), lastPhotoAt: expect.any(String) }),
+  ]);
+  // พนักงานทั่วไปผูกสาขาไม่ได้
+  expect((await call('PATCH', '/api/line/groups/G2', { branch: 'สยาม' })).status).toBe(403);
+
+  w.sb.users['staff@example.com'].role = 'admin';
+  expect((await call('PATCH', '/api/line/groups/G2', { branch: 'ไม่มีสาขานี้' })).status).toBe(422);
+  expect((await call('PATCH', '/api/line/groups/NOPE', { branch: 'สยาม' })).status).toBe(404);
+  const out = await call('PATCH', '/api/line/groups/G2', { branch: 'สยาม' });
+  expect(out).toMatchObject({ status: 200, body: { queued: 2, group: { id: 'G2', branch: 'สยาม' } } });
+  await Promise.all(tasks);
+  expect(w.sb.db.orders.filter(o => o.branch === 'สยาม')).toHaveLength(2);
+  expect(w.sb.db.receipt_line_inbox.filter(r => r.group_id === 'G2').map(r => r.status)).toEqual(['order', 'order']);
+  // เลิกผูกสาขาได้ (รูปใหม่จะรอผูกอีกครั้ง)
+  expect((await call('PATCH', '/api/line/groups/G2', { branch: null })).body.group.branch).toBe(null);
 });
 
 test('an image LINE no longer has is marked failed for good, not retried', async () => {
