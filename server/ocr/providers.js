@@ -149,7 +149,30 @@ export async function geminiProvider({ base64, mime }, env, fetchImpl = fetch) {
   throw errors.length ? finalError(errors) : new OcrError(slowMessage('Gemini'), 504);
 }
 
-// Typhoon OCR คืนเป็นข้อความ จึงต้องมีขั้นที่สองเพื่อดึงฟิลด์ (ยังไม่ได้ทดสอบกับ API จริง)
+// Typhoon ขั้นจัดโครงสร้างบางครั้งตอบ docType เป็นภาษาไทย ("ใบส่งซื้อสินค้า") และตัดชื่อ Bebeplay ออกจากหัวกระดาษ
+// (เจอจากการลองกับ API จริง 27 พ.ย. 2569) → ตัดสินสองช่องนี้จากข้อความ OCR ดิบอีกชั้น ไม่งั้นตัวกรอง LINE ทิ้งใบจริง
+const DOC_TYPES = ['order_form', 'receipt_only', 'other'];
+const squash = v => String(v || '').toLowerCase().replace(/[\s\u200b.\-_]/g, '');
+const BRAND = /(bebeplay|เบเบ้เพลย์|บีบีเพลย์)/;
+const ORDER_HEAD = /ใบ\s*(?:ส่ง|สั่ง)\s*ซื้อ(?:\s*สินค้า)?/;
+export function fixTyphoonFields(raw, ocrText) {
+  const r = { ...(raw || {}) };
+  const text = String(ocrText || '').replace(/<[^>]+>/g, ' ');
+  const head = text.slice(0, 600);
+  const headTitle = ORDER_HEAD.exec(head)?.[0].replace(/\s+/g, '');
+  if (!DOC_TYPES.includes(r.docType)) {
+    const d = `${r.docType || ''}`;
+    r.docType = ORDER_HEAD.test(d) || headTitle ? 'order_form' : /ใบเสร็จ|receipt/i.test(d) ? 'receipt_only' : 'other';
+  } else if (r.docType !== 'order_form' && headTitle) r.docType = 'order_form';
+  const title = squash(r.formTitle);
+  if (headTitle && BRAND.test(squash(head)) && !(BRAND.test(title) && /ใบ(ส่ง|สั่ง)ซื้อ/.test(title))) {
+    r.formTitle = `${headTitle} Bebeplay`;
+  }
+  return r;
+}
+
+// Typhoon OCR คืนเป็นข้อความ (มีตาราง HTML + ☑/☐) จึงต้องมีขั้นที่สองเพื่อดึงฟิลด์
+// ขั้นที่สองใช้ json_object (ลองแล้วเร็วสุด ~2 วิ และไม่ห่อข้อความ)
 export async function typhoonProvider({ dataUrl }, env, fetchImpl = fetch) {
   const key = env.TYPHOON_API_KEY;
   if (!key) throw new OcrError('ยังไม่ได้ตั้งค่า TYPHOON_API_KEY ในเซิร์ฟเวอร์', 503);
@@ -170,9 +193,9 @@ export async function typhoonProvider({ dataUrl }, env, fetchImpl = fetch) {
   const structured = await call({
     model: env.TYPHOON_TEXT_MODEL || 'typhoon-v2.5-30b-a3b-instruct',
     messages: [{ role: 'system', content: PROMPT }, { role: 'user', content: `Text read from the photo by OCR:\n\n${ocrText}` }],
-    temperature: 0,
+    response_format: { type: 'json_object' }, max_tokens: 2048, temperature: 0,
   });
-  return { raw: parseJsonLoose(structured), rawText: ocrText, model: env.TYPHOON_OCR_MODEL || 'typhoon-ocr' };
+  return { raw: fixTyphoonFields(parseJsonLoose(structured), ocrText), rawText: ocrText, model: env.TYPHOON_OCR_MODEL || 'typhoon-ocr' };
 }
 
 export const providers = { mock: mockProvider, gemini: geminiProvider, typhoon: typhoonProvider };

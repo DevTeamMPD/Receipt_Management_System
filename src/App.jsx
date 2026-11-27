@@ -109,7 +109,7 @@ function UploadForm({ branches, defaultBranch, ocr, onDone }) {
     {ocr.provider === 'none' && <div className="notice">ยังไม่ได้ตั้งค่า OCR ในระบบ — ระบบจะเก็บรูปไว้ แล้วให้คุณกรอกข้อมูลเอง</div>}
     {ocr.provider !== 'none' && !ocr.configured && <div className="banner bad"><TriangleAlert size={18} aria-hidden="true" />ยังไม่ได้ใส่คีย์ของ {ocr.provider} ในเซิร์ฟเวอร์ — ระบบจะเก็บรูปไว้โดยไม่อ่านอัตโนมัติ</div>}
     {ocr.demo && <div className="notice">โหมดสาธิต: ระบบ <strong>ไม่ได้อ่านรูปจริง</strong> จะสร้างข้อมูลสมมติ (ใช้ตอนพัฒนาเท่านั้น)</div>}
-    {ocr.configured && !ocr.demo && <div className="notice">รูปจะถูกส่งไปที่ <strong>{ocr.provider}</strong> เพื่ออ่านข้อมูล ใบสั่งซื้อมีข้อมูลลูกค้า ส่งเฉพาะรูปที่ตั้งใจให้อ่าน</div>}
+    {ocr.configured && !ocr.demo && <div className="notice">รูปจะถูกส่งไปที่ <strong>{ocr.provider}</strong>{ocr.backup && <> (สำรอง: <strong>{ocr.backup}</strong>)</>} เพื่ออ่านข้อมูล ใบสั่งซื้อมีข้อมูลลูกค้า ส่งเฉพาะรูปที่ตั้งใจให้อ่าน</div>}
     {error && <div className="banner bad" role="alert"><TriangleAlert size={18} aria-hidden="true" />{error}</div>}
     <div className="modal-actions"><button className="btn primary" disabled={!file || busy || !branch} aria-busy={busy} onClick={start}>{busy ? 'กำลังอ่านรูป…' : <><Upload size={18} aria-hidden="true" />อัปโหลดและอ่านใบสั่งซื้อ</>}</button></div>
   </>;

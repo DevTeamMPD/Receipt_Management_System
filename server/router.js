@@ -107,7 +107,7 @@ async function retryOcr(ctx) {
   const fill = Object.fromEntries(Object.entries(ocrDataColumns(x)).filter(([k, v]) => v !== '' && v !== null && (cur[k] === '' || cur[k] === null || cur[k] === undefined)));
   const patch = {
     ...fill,
-    ocr_status: 'done', ocr_provider: status.provider, ocr_model: x.model || null, ocr_confidence: x.confidence, ocr_uncertain: x.uncertain,
+    ocr_status: 'done', ocr_provider: x.provider || status.provider, ocr_model: x.model || null, ocr_confidence: x.confidence, ocr_uncertain: x.uncertain,
     ocr_original: Object.fromEntries(OCR_FIELD_KEYS.map(k => [k, x[k]])), ocr_raw_text: x.rawText || null, duplicate_of: dupId,
     review_status: needsCheckFor(x, dupId) ? 'needs_check' : 'needs_review',
   };
