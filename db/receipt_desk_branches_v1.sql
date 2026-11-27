@@ -36,7 +36,7 @@ create policy receipt_branches_update on public.receipt_branches for update to a
 
 -- เริ่มจากสาขาที่ใช้อยู่แล้ว (ค่าเริ่มต้นเดิม + ที่มีในใบสั่งซื้อ/กลุ่ม LINE)
 insert into public.receipt_branches (name, created_by)
-select distinct btrim(b), null from (
+select distinct btrim(b), null::uuid from (
   select unnest(array['สยาม', 'ลาดพร้าว', 'บางนา', 'รังสิต']) as b
   union select branch from public.receipt_orders
   union select branch from public.receipt_line_groups where branch is not null
