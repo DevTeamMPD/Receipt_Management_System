@@ -1,6 +1,7 @@
 import { ApiError, supabase } from './supabase.js';
 import { COOKIE, parseCookies, decodeSession, tokenExpiry, setCookie, clearCookie } from './session.js';
-import { ocrStatus, parseImageDataUrl } from './ocr/handler.js';
+import { ocrStatus, parseImageDataUrl, OCR_CHOICES } from './ocr/handler.js';
+import { applyOcrSetting } from './ocrSetting.js';
 import { BRANCH_MAX, ORDER_SELECT, cleanBranchName, loadBranches, mapRow, sanitizeItems, sanitizePatch, sortBranches } from './orders.js';
 import { BUCKET, OCR_FIELD_KEYS, dupCodeOf, findDuplicate, insertOrder, logEvent, logOcrRun, needsCheckFor, ocrDataColumns, readImage } from './orderCreate.js';
 import { validate } from '../src/validation.js';
@@ -38,7 +39,10 @@ async function authenticate(ctx) {
   return { token: sess.access_token, user: { id: p.user_id, email: p.email, name: p.display_name || p.email, role: p.role } };
 }
 
-const configOf = async (ctx, token) => ({ branches: await loadBranches(ctx.db, token, ctx.env), ocr: ocrStatus(ctx.env) });
+const configOf = async (ctx, token) => {
+  const choice = await applyOcrSetting(ctx, token);
+  return { branches: await loadBranches(ctx.db, token, ctx.env), ocr: { ...ocrStatus(ctx.env), source: choice ? 'setting' : 'env' } };
+};
 
 async function login(ctx) {
   const { email, password } = ctx.body || {};
@@ -68,6 +72,7 @@ async function listOrders(ctx) {
 }
 
 async function createOrder(ctx) {
+  await applyOcrSetting(ctx);
   const b = ctx.body || {};
   if (!(await loadBranches(ctx.db, ctx.auth.token, ctx.env)).includes(b.branch)) throw new ApiError(422, 'เลือกสาขาให้ถูกต้อง');
   let img;
@@ -82,6 +87,7 @@ const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', w
 
 // อ่านรูปใหม่ให้ใบที่ OCR ล้มเหลว/ข้ามไปตอนอัปโหลด — เติมเฉพาะช่องที่ยังว่าง (ไม่ทับสิ่งที่คนพิมพ์ไว้แล้ว)
 async function retryOcr(ctx) {
+  await applyOcrSetting(ctx);
   const { db, auth, env } = ctx;
   const id = asId(ctx.params.id);
   const version = asVersion(ctx.body?.version);
@@ -312,6 +318,22 @@ async function setBranchActive(ctx) {
   return ok({ branches: await loadBranches(ctx.db, ctx.auth.token, ctx.env) });
 }
 
+// ผู้ดูแลเลือกตัวอ่าน OCR เริ่มต้น (อีกตัวเป็นสำรองอัตโนมัติถ้ามีคีย์) — มีผลกับรูปถัดไปทันที ไม่ต้อง deploy ใหม่
+async function setOcrProvider(ctx) {
+  requireAdmin(ctx, 'เปลี่ยนตัวอ่าน OCR');
+  const provider = ctx.body?.provider;
+  if (!OCR_CHOICES.includes(provider)) throw new ApiError(422, 'เลือกตัวอ่าน OCR ให้ถูกต้อง');
+  if (!ocrStatus(ctx.env).available[provider]) throw new ApiError(422, `ยังไม่ได้ใส่คีย์ของ ${provider} ในเซิร์ฟเวอร์ เลือกตัวนี้ไม่ได้`);
+  try {
+    await ctx.db.rest(ctx.auth.token, 'POST', 'receipt_settings?on_conflict=key', { body: { key: 'ocr_provider', value: provider }, prefer: 'resolution=merge-duplicates,return=minimal' });
+  } catch (e) {
+    if (e.code === 'PGRST205' || e.code === '42P01') throw new ApiError(503, 'ยังเปลี่ยนตัวอ่าน OCR ไม่ได้ ต้องอัปเดตฐานข้อมูลก่อน (receipt_desk_settings_v1.sql)');
+    throw e;
+  }
+  console.info('ocr provider set', JSON.stringify({ provider }));
+  return ok({ ocr: { ...ocrStatus({ ...ctx.env, OCR_PROVIDER: provider }), source: 'setting' } });
+}
+
 const ROUTES = [
   ['GET', /^\/api\/cron\/line-inbox$/, lineInboxCron, { public: true }],
   ['POST', /^\/api\/auth\/login$/, login, { public: true }],
@@ -327,6 +349,7 @@ const ROUTES = [
   ['PATCH', /^\/api\/line\/groups\/(?<groupId>[^/]+)$/, setLineGroup],
   ['POST', /^\/api\/branches$/, addBranchList],
   ['PATCH', /^\/api\/branches\/(?<name>[^/]+)$/, setBranchActive],
+  ['PUT', /^\/api\/settings\/ocr$/, setOcrProvider],
 ];
 
 function sameOrigin(headers) {

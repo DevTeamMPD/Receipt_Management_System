@@ -27,6 +27,7 @@ export const api = {
   retryOcr: (id, version) => call('POST', `/api/orders/${id}/ocr`, { version }),
   lineGroups: () => call('GET', '/api/line/groups'),
   setLineGroupBranch: (groupId, branch, create = false) => call('PATCH', `/api/line/groups/${encodeURIComponent(groupId)}`, { branch, create }),
+  setOcrProvider: provider => call('PUT', '/api/settings/ocr', { provider }),
   addBranches: names => call('POST', '/api/branches', { names }),
   setBranchActive: (name, active) => call('PATCH', `/api/branches/${encodeURIComponent(name)}`, { active }),
   act: (id, action, version, extra = {}) => call('POST', `/api/orders/${id}/${action}`, { version, ...extra }),

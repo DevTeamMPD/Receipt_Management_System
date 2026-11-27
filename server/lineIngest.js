@@ -4,6 +4,7 @@ import { loadBranches } from './orders.js';
 import { BUCKET, EXT, insertOrder, logOcrRun, readImage } from './orderCreate.js';
 import { branchFromGroupName, lineClient, lineConfigured, verifyLineSignature } from './line.js';
 import { ocrStatus } from './ocr/handler.js';
+import { applyOcrSetting } from './ocrSetting.js';
 import { isBebeplayOrderForm } from './ocr/normalize.js';
 
 // รับรูปใบสั่งซื้อจากกลุ่ม LINE (บอทเงียบ ไม่ตอบในกลุ่ม)
@@ -128,6 +129,7 @@ export async function processInboxItem(ctx, id) {
       bytes = await db.download(auth.token, BUCKET, imagePath);
     }
 
+    await applyOcrSetting(ctx);
     const run = ocrStatus(ctx.env).configured ? await readImage(ctx, `data:${mime};base64,${bytes.toString('base64')}`) : null;
     const x = run?.x;
     if (x && !isBebeplayOrderForm(x)) {

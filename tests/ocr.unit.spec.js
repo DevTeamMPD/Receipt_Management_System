@@ -361,3 +361,19 @@ test('a slow Gemini still leaves time for Typhoon inside the shared budget', asy
   expect(out.provider).toBe('typhoon');
   expect(Date.now() - t0).toBeLessThan(4000);
 });
+
+test('the admin-picked reader overrides OCR_PROVIDER; unknown, keyless or missing settings fall back to the env', async () => {
+  const { loadOcrChoice, applyOcrSetting } = await import('../server/ocrSetting.js');
+  const env = { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g', TYPHOON_API_KEY: 't' };
+  const dbWith = value => ({ rest: async () => (value === undefined ? [] : [{ value }]) });
+  expect(await loadOcrChoice(dbWith('typhoon'), 'tk', env)).toBe('typhoon');
+  expect(await loadOcrChoice(dbWith('mock'), 'tk', env)).toBe(null);
+  expect(await loadOcrChoice(dbWith('typhoon'), 'tk', { OCR_PROVIDER: 'gemini', GEMINI_API_KEY: 'g' })).toBe(null);
+  expect(await loadOcrChoice(dbWith(undefined), 'tk', env)).toBe(null);
+  const missing = { rest: async () => { throw Object.assign(new Error('x'), { code: 'PGRST205', status: 404 }); } };
+  expect(await loadOcrChoice(missing, 'tk', env)).toBe(null);
+  const ctx = { db: dbWith('typhoon'), env, auth: { token: 'tk' } };
+  await applyOcrSetting(ctx);
+  expect(ocrStatus(ctx.env)).toMatchObject({ provider: 'typhoon', backup: 'gemini', configured: true });
+  expect(ocrStatus(env)).toMatchObject({ provider: 'gemini', backup: 'typhoon', available: { gemini: true, typhoon: true } });
+});
