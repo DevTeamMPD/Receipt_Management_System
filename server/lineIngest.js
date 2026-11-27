@@ -1,6 +1,6 @@
 import { ApiError, supabase } from './supabase.js';
 import { tokenExpiry } from './session.js';
-import { branchesFrom } from './orders.js';
+import { loadBranches } from './orders.js';
 import { BUCKET, EXT, insertOrder, logOcrRun, readImage } from './orderCreate.js';
 import { branchFromGroupName, lineClient, lineConfigured, verifyLineSignature } from './line.js';
 import { ocrStatus } from './ocr/handler.js';
@@ -38,7 +38,7 @@ async function ensureGroup(ctx, groupId) {
   const found = (await db.rest(auth.token, 'GET', `receipt_line_groups?select=*&group_id=eq.${encodeURIComponent(groupId)}&limit=1`))?.[0];
   if (found) return found;
   const name = await line.groupName(groupId);
-  const row = { group_id: groupId, group_name: name, branch: branchFromGroupName(name, branchesFrom(env)) };
+  const row = { group_id: groupId, group_name: name, branch: branchFromGroupName(name, await loadBranches(db, auth.token, env)) };
   const saved = await db.rest(auth.token, 'POST', 'receipt_line_groups', { body: row, prefer: 'resolution=ignore-duplicates,return=representation' });
   if (!row.branch) console.warn('line group not mapped to a branch', JSON.stringify({ group: groupId.slice(-6) }));
   return saved?.[0] || row;

@@ -203,7 +203,25 @@ legend { font-weight: 600; font-size: 17px; padding: 0 8px; color: var(--primary
 .lg-state.off { background: #e8edf3; color: var(--ink-2); }
 .lg-branch { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .lg-branch > span { color: var(--ink-2); }
-.lg-branch select { flex: 1; max-width: 260px; }
+.lg-branch { align-items: flex-start; }
+.lg-branch > span, .lg-branch > b { line-height: 44px; }
+.lg-picker { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.lg-picker input { flex: 1 1 200px; min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; background: var(--surface); }
+.lg-picker .btn { padding: 0 14px; }
+.lg-tools { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 12px 0 4px; }
+.lg-tools .search { flex: 1 1 240px; }
+.lg-filter { display: flex; gap: 6px; }
+.chip { min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); font-size: 15px; }
+.chip.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary-dark); font-weight: 600; }
+.lg-manage { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 8px 0; }
+.lg-manage summary { cursor: pointer; font-weight: 600; color: var(--primary-dark); min-height: 32px; display: flex; align-items: center; }
+.lg-add { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; font-size: 15px; color: var(--ink-2); }
+.lg-add textarea { font: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; resize: vertical; color: var(--ink); }
+.lg-add-row { display: flex; justify-content: flex-end; margin-top: 8px; }
+.lg-chips { list-style: none; padding: 0; margin: 10px 0 0; display: flex; flex-wrap: wrap; gap: 6px; max-height: 180px; overflow-y: auto; }
+.lg-chips li { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 12px; border-radius: 999px; background: #eef2f7; font-size: 14px; }
+.lg-chips button { width: 32px; height: 32px; border-radius: 999px; background: transparent; color: var(--ink-2); display: grid; place-items: center; }
+.lg-chips button:hover:not(:disabled) { background: var(--bad-bg); color: var(--bad); }
 .lg-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 10px 0 0; font-size: 14px; color: var(--ink-2); }
 .lg-stats .warn { color: var(--warn); font-weight: 600; }
 .lg-stats .bad, .lg-note.bad { color: var(--bad); }

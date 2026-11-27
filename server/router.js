@@ -1,12 +1,12 @@
 import { ApiError, supabase } from './supabase.js';
 import { COOKIE, parseCookies, decodeSession, tokenExpiry, setCookie, clearCookie } from './session.js';
 import { ocrStatus, parseImageDataUrl } from './ocr/handler.js';
-import { ORDER_SELECT, branchesFrom, mapRow, sanitizeItems, sanitizePatch } from './orders.js';
+import { BRANCH_MAX, ORDER_SELECT, cleanBranchName, loadBranches, mapRow, sanitizeItems, sanitizePatch, sortBranches } from './orders.js';
 import { BUCKET, OCR_FIELD_KEYS, dupCodeOf, findDuplicate, insertOrder, logEvent, logOcrRun, needsCheckFor, ocrDataColumns, readImage } from './orderCreate.js';
 import { validate } from '../src/validation.js';
 import { timingSafeEqual } from 'node:crypto';
 import { MAX_ATTEMPTS, claimWaitingForGroup, processDueInbox, processNow } from './lineIngest.js';
-import { lineClient, lineConfigured } from './line.js';
+import { branchFromGroupName, lineClient, lineConfigured } from './line.js';
 
 const EDIT_LOG_WINDOW_MS = 5 * 60 * 1000;
 const PENDING = 'review_status=in.(needs_review,needs_check)&jst_status=eq.none';
@@ -38,7 +38,7 @@ async function authenticate(ctx) {
   return { token: sess.access_token, user: { id: p.user_id, email: p.email, name: p.display_name || p.email, role: p.role } };
 }
 
-const configOf = ctx => ({ branches: branchesFrom(ctx.env), ocr: ocrStatus(ctx.env) });
+const configOf = async (ctx, token) => ({ branches: await loadBranches(ctx.db, token, ctx.env), ocr: ocrStatus(ctx.env) });
 
 async function login(ctx) {
   const { email, password } = ctx.body || {};
@@ -48,7 +48,7 @@ async function login(ctx) {
   const p = rows?.[0];
   if (!p || !p.active) { await ctx.db.logout(d.access_token); throw new ApiError(403, 'บัญชีนี้ไม่มีสิทธิ์ใช้ระบบ ติดต่อผู้ดูแล', { code: 'not_allowed' }); }
   ctx.cookies.push(setCookie({ access_token: d.access_token, refresh_token: d.refresh_token }, ctx.secure));
-  return ok({ user: { id: p.user_id, email: p.email, name: p.display_name || p.email, role: p.role }, ...configOf(ctx) });
+  return ok({ user: { id: p.user_id, email: p.email, name: p.display_name || p.email, role: p.role }, ...(await configOf(ctx, d.access_token)) });
 }
 
 async function logout(ctx) {
@@ -58,7 +58,7 @@ async function logout(ctx) {
   return ok({ ok: true });
 }
 
-const me = ctx => ok({ user: ctx.auth.user, ...configOf(ctx) });
+const me = async ctx => ok({ user: ctx.auth.user, ...(await configOf(ctx, ctx.auth.token)) });
 
 async function listOrders(ctx) {
   const rows = await ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?${ORDER_SELECT}&order=created_at.desc&limit=300`);
@@ -69,7 +69,7 @@ async function listOrders(ctx) {
 
 async function createOrder(ctx) {
   const b = ctx.body || {};
-  if (!branchesFrom(ctx.env).includes(b.branch)) throw new ApiError(422, 'เลือกสาขาให้ถูกต้อง');
+  if (!(await loadBranches(ctx.db, ctx.auth.token, ctx.env)).includes(b.branch)) throw new ApiError(422, 'เลือกสาขาให้ถูกต้อง');
   let img;
   try { img = parseImageDataUrl(b.image); } catch (e) { throw new ApiError(e.status || 400, e.message); }
   const status = ocrStatus(ctx.env);
@@ -213,32 +213,103 @@ function groupView(g, inbox) {
   };
 }
 
+const statsSince = ctx => new Date(ctx.now.getTime() - LINE_STATS_DAYS * 86_400_000).toISOString();
+const inboxStats = (ctx, groupFilter = '') => ctx.db.rest(ctx.auth.token, 'GET', `receipt_line_inbox?select=group_id,status,branch,attempts,created_at${groupFilter}&created_at=gte.${encodeURIComponent(statsSince(ctx))}&order=created_at.desc&limit=5000`);
+const requireAdmin = (ctx, what) => { if (ctx.auth.user.role !== 'admin') throw new ApiError(403, `${what}ได้เฉพาะผู้ดูแล (admin)`); };
+
 async function lineGroups(ctx) {
-  const { db, auth, now } = ctx;
-  const since = new Date(now.getTime() - LINE_STATS_DAYS * 86_400_000).toISOString();
-  const [groups, inbox] = await Promise.all([
+  const { db, auth } = ctx;
+  const [groups, inbox, branches] = await Promise.all([
     db.rest(auth.token, 'GET', 'receipt_line_groups?select=group_id,group_name,branch,active,created_at&order=created_at.asc'),
-    db.rest(auth.token, 'GET', `receipt_line_inbox?select=group_id,status,branch,attempts,created_at&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=5000`),
+    inboxStats(ctx),
+    loadBranches(db, auth.token, ctx.env),
   ]);
-  return ok({ groups: (groups || []).map(g => groupView(g, inbox || [])), canEdit: auth.user.role === 'admin', lineConfigured: lineConfigured(ctx.env), statsDays: LINE_STATS_DAYS });
+  return ok({ groups: (groups || []).map(g => groupView(g, inbox || [])), branches, canEdit: auth.user.role === 'admin', lineConfigured: lineConfigured(ctx.env), statsDays: LINE_STATS_DAYS });
 }
+
+// เพิ่มสาขาใหม่ (ไม่ซ้ำ) — คืนรายชื่อที่เพิ่มจริง · ยังไม่มีตาราง = แจ้งให้รออัปเดตฐานข้อมูล
+async function addBranches(ctx, names) {
+  try {
+    const rows = await ctx.db.rest(ctx.auth.token, 'POST', 'receipt_branches?on_conflict=name', { body: names.map(name => ({ name, active: true })), prefer: 'resolution=merge-duplicates,return=representation' });
+    return (rows || []).map(r => r.name);
+  } catch (e) {
+    if (e.code === 'PGRST205' || e.code === '42P01') throw new ApiError(503, 'ยังเพิ่มสาขาใหม่ไม่ได้ ต้องอัปเดตฐานข้อมูลก่อน (receipt_desk_branches_v1.sql)');
+    throw e;
+  }
+}
+
+// ผูกกลุ่มที่ยังไม่มีสาขาจากชื่อกลุ่ม แล้วดึงรูปที่รออยู่ — คืน [{id, branch}] และจำนวนรูปที่เริ่มดึง
+async function autoMapGroups(ctx, branches) {
+  const { db, auth } = ctx;
+  const open = await db.rest(auth.token, 'GET', 'receipt_line_groups?select=group_id,group_name&branch=is.null&active=eq.true');
+  const mapped = [];
+  const ids = [];
+  for (const g of open || []) {
+    const branch = branchFromGroupName(g.group_name, branches);
+    if (!branch) continue;
+    const rows = await db.rest(auth.token, 'PATCH', `receipt_line_groups?group_id=eq.${encodeURIComponent(g.group_id)}&branch=is.null`, { body: { branch }, prefer: 'return=representation' });
+    if (!rows?.length) continue;
+    mapped.push({ id: g.group_id, branch });
+    ids.push(...await claimWaitingForGroup(ctx, g.group_id, branch));
+  }
+  return { mapped, ids };
+}
+const startPulling = (ctx, ids) => { if (ids.length && ctx.defer) ctx.defer(processNow({ env: ctx.env, fetchImpl: ctx.fetchImpl, now: ctx.now, ids: ids.slice(0, PROCESS_NOW) })); };
 
 async function setLineGroup(ctx) {
   const { db, auth, env } = ctx;
-  if (auth.user.role !== 'admin') throw new ApiError(403, 'ผูกกลุ่มกับสาขาได้เฉพาะผู้ดูแล (admin)');
+  requireAdmin(ctx, 'ผูกกลุ่มกับสาขา');
   const id = asGroupId(ctx.params.groupId);
-  const branch = ctx.body?.branch ?? null;
-  if (branch !== null && !branchesFrom(env).includes(branch)) throw new ApiError(422, 'เลือกสาขาให้ถูกต้อง');
+  const raw = ctx.body?.branch;
+  const branch = raw === null || raw === undefined || raw === '' ? null : cleanBranchName(raw);
+  if (branch !== null && (!branch || branch.length > BRANCH_MAX)) throw new ApiError(422, `ชื่อสาขาต้องยาว 1–${BRANCH_MAX} ตัวอักษร`);
+  let created = false;
+  if (branch && !(await loadBranches(db, auth.token, env)).includes(branch)) {
+    if (!ctx.body?.create) throw new ApiError(422, 'ไม่มีสาขานี้ในรายการ', { code: 'unknown_branch' });
+    created = (await addBranches(ctx, [branch])).length > 0;
+  }
   const patch = { branch };
   if (lineConfigured(env)) { const name = await lineClient(env, ctx.fetchImpl).groupName(id); if (name) patch.group_name = name; } // ชื่อกลุ่มล่าสุดจาก LINE
   const rows = await db.rest(auth.token, 'PATCH', `receipt_line_groups?group_id=eq.${encodeURIComponent(id)}`, { body: patch, prefer: 'return=representation' });
   if (!rows?.length) throw new ApiError(404, 'ไม่พบกลุ่มนี้');
   const ids = branch ? await claimWaitingForGroup(ctx, id, branch) : [];
-  if (ids.length && ctx.defer) ctx.defer(processNow({ env, fetchImpl: ctx.fetchImpl, now: ctx.now, ids: ids.slice(0, PROCESS_NOW) }));
-  console.info('line group mapped', JSON.stringify({ group: id.slice(-6), branch, queued: ids.length }));
-  const since = new Date(ctx.now.getTime() - LINE_STATS_DAYS * 86_400_000).toISOString();
-  const inbox = await db.rest(auth.token, 'GET', `receipt_line_inbox?select=group_id,status,branch,attempts,created_at&group_id=eq.${encodeURIComponent(id)}&created_at=gte.${encodeURIComponent(since)}&limit=5000`);
-  return ok({ group: groupView(rows[0], inbox || []), queued: ids.length });
+  startPulling(ctx, ids);
+  console.info('line group mapped', JSON.stringify({ group: id.slice(-6), branch, queued: ids.length, created }));
+  const inbox = await inboxStats(ctx, `&group_id=eq.${encodeURIComponent(id)}`);
+  return ok({ group: groupView(rows[0], inbox || []), queued: ids.length, created, branches: await loadBranches(db, auth.token, env) });
+}
+
+// วางรายชื่อสาขาหลายบรรทัด → เพิ่มที่ยังไม่มี แล้วผูกกลุ่มที่ชื่อกลุ่มมีชื่อสาขาอยู่ให้อัตโนมัติ
+async function addBranchList(ctx) {
+  requireAdmin(ctx, 'เพิ่มสาขา');
+  const list = Array.isArray(ctx.body?.names) ? ctx.body.names : [];
+  const names = sortBranches(list.map(cleanBranchName).filter(Boolean));
+  if (!names.length) throw new ApiError(422, 'ใส่ชื่อสาขาอย่างน้อย 1 ชื่อ (บรรทัดละ 1 สาขา)');
+  if (names.length > 200) throw new ApiError(422, 'เพิ่มได้ครั้งละไม่เกิน 200 สาขา');
+  const tooLong = names.find(n => n.length > BRANCH_MAX);
+  if (tooLong) throw new ApiError(422, `ชื่อสาขายาวเกิน ${BRANCH_MAX} ตัวอักษร: ${tooLong.slice(0, 20)}…`);
+  const before = await loadBranches(ctx.db, ctx.auth.token, ctx.env);
+  await addBranches(ctx, names);
+  const branches = await loadBranches(ctx.db, ctx.auth.token, ctx.env);
+  const { mapped, ids } = await autoMapGroups(ctx, branches);
+  startPulling(ctx, ids);
+  return ok({ added: names.filter(n => !before.includes(n)), branches, autoMapped: mapped, queued: ids.length });
+}
+
+// ซ่อน/แสดงสาขาในตัวเลือก (ใบเก่าและกลุ่มที่ผูกไว้ไม่เปลี่ยน)
+async function setBranchActive(ctx) {
+  requireAdmin(ctx, 'ซ่อนสาขา');
+  const name = cleanBranchName(decodeURIComponent(ctx.params.name || ''));
+  if (typeof ctx.body?.active !== 'boolean') throw new ApiError(422, 'ระบุ active เป็น true/false');
+  let rows;
+  try {
+    rows = await ctx.db.rest(ctx.auth.token, 'PATCH', `receipt_branches?name=eq.${encodeURIComponent(name)}`, { body: { active: ctx.body.active }, prefer: 'return=representation' });
+  } catch (e) {
+    if (e.code === 'PGRST205' || e.code === '42P01') throw new ApiError(503, 'ยังแก้รายชื่อสาขาไม่ได้ ต้องอัปเดตฐานข้อมูลก่อน (receipt_desk_branches_v1.sql)');
+    throw e;
+  }
+  if (!rows?.length) throw new ApiError(404, 'ไม่พบสาขานี้');
+  return ok({ branches: await loadBranches(ctx.db, ctx.auth.token, ctx.env) });
 }
 
 const ROUTES = [
@@ -254,6 +325,8 @@ const ROUTES = [
   ['DELETE', /^\/api\/orders\/(?<id>[^/]+)$/, deleteOrder],
   ['GET', /^\/api\/line\/groups$/, lineGroups],
   ['PATCH', /^\/api\/line\/groups\/(?<groupId>[^/]+)$/, setLineGroup],
+  ['POST', /^\/api\/branches$/, addBranchList],
+  ['PATCH', /^\/api\/branches\/(?<name>[^/]+)$/, setBranchActive],
 ];
 
 function sameOrigin(headers) {
