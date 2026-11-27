@@ -134,9 +134,25 @@ test('a group not tied to a branch: photos are noted (message id only, no downlo
   expect(w.sb.db.orders).toHaveLength(0);
   // cron ไม่แตะรูปที่ยังไม่ผูกสาขา
   expect((await processDueInbox({ env, fetchImpl: w.fetchImpl, now: new Date(NOW.getTime() + 10 * 60_000) })).processed).toBe(0);
-  // ไม่ใช่กลุ่ม (แชทส่วนตัว) / ไม่ใช่รูป → ไม่สนใจ
+  // ไม่ใช่กลุ่ม (แชทส่วนตัว) / ไม่ใช่รูป → ไม่รับเข้ากล่องรูป
   await post(w, [{ ...imageEvent('m5'), source: { type: 'user', userId: 'U1' } }, { ...imageEvent('m6'), message: { id: 'm6', type: 'text', text: 'hi' } }]);
   expect(w.sb.db.receipt_line_inbox).toHaveLength(1);
+});
+
+test('a group the bot was already in shows up on its first activity (e.g. a text message), and re-joining reactivates it', async () => {
+  const w = world({ groups: { G1: 'Sales บางนา', G9: 'Sales รังสิต' } });
+  const text = (id, groupId) => ({ type: 'message', timestamp: NOW.getTime(), source: { type: 'group', groupId, userId: 'U1' }, message: { id, type: 'text', text: 'สวัสดี' } });
+  await post(w, [text('t1', 'G9'), text('t2', 'G9'), { type: 'memberJoined', timestamp: NOW.getTime(), source: { type: 'group', groupId: 'G1' }, joined: { members: [] } }]);
+  expect(w.sb.db.receipt_line_groups).toEqual([
+    expect.objectContaining({ group_id: 'G9', group_name: 'Sales รังสิต', branch: 'รังสิต', active: true }),
+    expect.objectContaining({ group_id: 'G1', branch: 'บางนา' }),
+  ]);
+  expect(w.state.lineCalls.filter(u => u.includes('/group/G9/summary'))).toHaveLength(1); // ข้อความที่สองไม่ถามชื่อกลุ่มซ้ำ
+  expect(w.sb.db.receipt_line_inbox || []).toHaveLength(0);
+  await post(w, [{ type: 'leave', timestamp: NOW.getTime(), source: { type: 'group', groupId: 'G9' } }]);
+  expect(w.sb.db.receipt_line_groups[0].active).toBe(false);
+  await post(w, [{ type: 'join', timestamp: NOW.getTime(), source: { type: 'group', groupId: 'G9' } }]);
+  expect(w.sb.db.receipt_line_groups[0].active).toBe(true);
 });
 
 test('LINE groups page: everyone sees the groups; only an admin maps a branch, which then pulls the waiting photos', async () => {

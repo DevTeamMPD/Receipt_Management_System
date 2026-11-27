@@ -16,7 +16,10 @@ const STUCK_AFTER_MS = 5 * 60 * 1000;
 
 // บัญชีระบบของ LINE ล็อกอินด้วยรหัสผ่าน (ไม่ใช้คีย์ service role) — เก็บ token ไว้ใช้ซ้ำระหว่างคำขอบนเครื่องเดิม
 let cached = null;
-export const resetLineServiceSession = () => { cached = null; };
+// กลุ่มที่เพิ่งจดไว้บนเครื่องนี้ — ข้อความทั่วไปในกลุ่มไม่ต้องเช็คฐานข้อมูลทุกข้อความ
+const seenGroups = new Map();
+const SEEN_MS = 10 * 60 * 1000;
+export const resetLineServiceSession = () => { cached = null; seenGroups.clear(); };
 async function serviceAuth(env, db, now) {
   if (!env.LINE_SERVICE_EMAIL || !env.LINE_SERVICE_PASSWORD) throw new ApiError(503, 'ยังไม่ได้ตั้งค่า LINE_SERVICE_EMAIL / LINE_SERVICE_PASSWORD');
   if (cached && cached.email === env.LINE_SERVICE_EMAIL && cached.exp - now.getTime() > 120_000) return cached.auth;
@@ -58,10 +61,21 @@ export async function handleLineWebhook({ rawBody, headers = {}, env, fetchImpl 
     const groupId = ev?.source?.type === 'group' ? ev.source.groupId : null;
     if (!groupId) continue;
     try {
-      if (ev.type === 'join') { await ensureGroup(ctx, groupId); continue; }
-      if (ev.type === 'leave') { await ctx.db.rest(ctx.auth.token, 'PATCH', `receipt_line_groups?group_id=eq.${encodeURIComponent(groupId)}`, { body: { active: false } }); continue; }
+      const byId = `receipt_line_groups?group_id=eq.${encodeURIComponent(groupId)}`;
+      if (ev.type === 'leave') { seenGroups.delete(groupId); await ctx.db.rest(ctx.auth.token, 'PATCH', byId, { body: { active: false } }); continue; }
+      if (ev.type === 'join') {
+        const g = await ensureGroup(ctx, groupId);
+        if (g.active === false) await ctx.db.rest(ctx.auth.token, 'PATCH', byId, { body: { active: true } }); // เชิญบอทกลับเข้ากลุ่มเดิม
+        seenGroups.set(groupId, now.getTime());
+        continue;
+      }
       const m = ev.message;
-      if (ev.type !== 'message' || m?.type !== 'image' || (m.contentProvider?.type && m.contentProvider.type !== 'line')) continue;
+      const isPhoto = ev.type === 'message' && m?.type === 'image' && (!m.contentProvider?.type || m.contentProvider.type === 'line');
+      if (!isPhoto) {
+        // บอทที่อยู่ในกลุ่มก่อนต่อ webhook ไม่เคยได้ event "join" — จดกลุ่มเมื่อมีความเคลื่อนไหวใด ๆ (เช่นข้อความ) ให้ขึ้นในหน้า "กลุ่ม LINE"
+        if (now.getTime() - (seenGroups.get(groupId) || 0) > SEEN_MS) { await ensureGroup(ctx, groupId); seenGroups.set(groupId, now.getTime()); }
+        continue;
+      }
       const group = await ensureGroup(ctx, groupId);
       if (!group.active) continue;
       // ยังไม่ผูกสาขา: จดไว้แค่รหัสข้อความ (ยังไม่โหลดรูปลูกค้า) — ผูกสาขาเมื่อไหร่ค่อยดึงรูปจาก LINE (claimWaitingForGroup)

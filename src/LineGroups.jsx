@@ -108,7 +108,7 @@ export default function LineGroups({ onBranchesChange, onAuthError }) {
 
   return <div className="line-groups">
     <div className="lg-head">
-      <p className="modal-desc">บอทจะขึ้นในรายการเมื่อถูกเชิญเข้ากลุ่ม หรือเมื่อมีคนส่งรูปในกลุ่ม · ตัวเลขนับ {data.statsDays} วันล่าสุด</p>
+      <p className="modal-desc">กลุ่มจะขึ้นในรายการเมื่อเชิญบอทเข้ากลุ่ม หรือเมื่อมีคนพิมพ์ข้อความ/ส่งรูปในกลุ่มที่บอทอยู่ · ตัวเลขนับ {data.statsDays} วันล่าสุด</p>
       <button className="icon-btn" aria-label="รีเฟรชรายการกลุ่ม" title="รีเฟรช" onClick={load}><RefreshCw size={18} /></button>
     </div>
     {!data.lineConfigured && <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" />ยังไม่ได้ตั้งค่า LINE ในเซิร์ฟเวอร์ ระบบจึงยังไม่รับรูปจากกลุ่ม</div>}
@@ -124,7 +124,7 @@ export default function LineGroups({ onBranchesChange, onAuthError }) {
       </div>
     </div>}
 
-    {!data.groups.length && <p className="lg-empty">ยังไม่มีกลุ่ม — เชิญ LINE OA เข้ากลุ่มของสาขา แล้วส่งรูปสักรูปหรือกดรีเฟรช</p>}
+    {!data.groups.length && <p className="lg-empty">ยังไม่มีกลุ่ม — เชิญ LINE OA เข้ากลุ่มของสาขา หรือพิมพ์ข้อความในกลุ่มที่บอทอยู่แล้ว แล้วกดรีเฟรช</p>}
     {data.groups.length > 0 && !shown.length && <p className="lg-empty">ไม่พบกลุ่มที่ตรงกับที่ค้นหา</p>}
     <ul className="lg-list">
       {shown.map(g => {
