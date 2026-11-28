@@ -445,3 +445,66 @@ test('a reader without a key cannot be picked, and staff do not see the OCR sett
   await expect(page.locator('.order-list')).toBeVisible();
   await expect(page.getByRole('button', { name: 'ตั้งค่า OCR' })).toHaveCount(0);
 });
+
+test('a SKU typed on an item is saved and remembered; the next waiting order with the same item gets it filled in and marked', async ({ page }) => {
+  const api = await installApi(page);
+  api.sb.db.receipt_sku_memory = [];
+  // ใบถัดไป (วิภา) มีสินค้าชุดเดียวกับใบแรก แต่ OCR เว้นวรรคต่างกัน
+  api.sb.db.items.push({ order_id: api.rows.check.id, position: 0, product: 'คอกกั้นเด็ก', size: 'L 6ฟุต', color: 'ฟ้า' });
+  await page.goto('/');
+  await expect(page.getByLabel('SKU 1')).toHaveValue('');
+  await expect(page.getByText('กรอก SKU ครั้งเดียว')).toBeVisible();
+  await page.getByLabel('SKU 1').fill('BP-0001');
+  await expect(saved(page)).toBeVisible();
+  const stored = id => api.sb.db.items.filter(i => i.order_id === id).sort((a, b) => a.position - b.position).map(i => i.sku || '');
+  expect(stored(api.rows.todo.id)).toEqual(['BP-0001', '']);
+  expect(api.sb.db.receipt_sku_memory).toEqual([expect.objectContaining({ product: 'คอกกั้นเด็ก', size: 'L 6 ฟุต', color: 'ฟ้า', sku: 'BP-0001' })]);
+
+  await item(page, 'วิภา').click();
+  await expect(page.getByLabel('SKU 1')).toHaveValue('BP-0001');
+  await expect(page.getByLabel('SKU 1')).toHaveClass(/is-auto/);
+  await expect(page.getByText('เติม SKU ที่เคยกรอกไว้ให้ 1 รายการ')).toBeVisible();
+  await expect(saved(page)).toBeVisible();
+  expect(stored(api.rows.check.id)).toEqual(['BP-0001']);
+  // แก้เองได้ และค่าที่แก้กลายเป็นค่าที่จำ
+  await page.getByLabel('SKU 1').fill('BP-0002');
+  await expect(page.getByLabel('SKU 1')).not.toHaveClass(/is-auto/);
+  await expect(saved(page)).toBeVisible();
+  expect(api.sb.db.receipt_sku_memory.map(r => r.sku)).toEqual(['BP-0002']);
+  // ยังคงอยู่หลังโหลดหน้าใหม่
+  await page.reload();
+  await item(page, 'วิภา').click();
+  await expect(page.getByLabel('SKU 1')).toHaveValue('BP-0002');
+});
+
+test('orders already waiting get remembered SKUs when opened; changing the size swaps the SKU; a SKU removed by hand stays removed', async ({ page }) => {
+  const api = await installApi(page);
+  api.sb.db.receipt_sku_memory = [
+    { combo_key: 'คอกกั้นเด็ก|l6ฟุต|ฟ้า', sku: 'PEN-L6-BL' },
+    { combo_key: 'คอกกั้นเด็ก|m4ฟุต|ฟ้า', sku: 'PEN-M4-BL' },
+  ];
+  await page.goto('/');
+  // ใบบนสุด: คอกกั้นเด็ก L 6 ฟุต ฟ้า (รู้จัก) + เบาะ PU (ยังไม่เคยกรอก)
+  await expect(page.getByLabel('SKU 1')).toHaveValue('PEN-L6-BL');
+  await expect(page.getByLabel('SKU 2')).toHaveValue('');
+  await expect(saved(page)).toBeVisible();
+  const stored = () => api.sb.db.items.filter(i => i.order_id === api.rows.todo.id).sort((a, b) => a.position - b.position).map(i => i.sku || '');
+  expect(stored()).toEqual(['PEN-L6-BL', '']);
+  // แก้ขนาด → SKU ที่ระบบเติมให้เปลี่ยนตามชุดใหม่
+  await page.getByLabel('ขนาด 1').fill('M 4 ฟุต');
+  await expect(page.getByLabel('SKU 1')).toHaveValue('PEN-M4-BL');
+  await page.getByLabel('ขนาด 1').fill('XL');
+  await expect(page.getByLabel('SKU 1')).toHaveValue('');
+  await page.getByLabel('ขนาด 1').fill('L 6 ฟุต');
+  await expect(page.getByLabel('SKU 1')).toHaveValue('PEN-L6-BL');
+  // ลบ SKU เอง แล้วไปใบอื่นและกลับมา: ไม่ถูกเติมกลับ
+  await page.getByLabel('SKU 1').fill('');
+  await expect(saved(page)).toBeVisible();
+  await item(page, 'วิภา').click();
+  await item(page, 'สมชาย').click();
+  await expect(page.getByLabel('สินค้า 1')).toHaveValue('คอกกั้นเด็ก');
+  await expect(page.getByLabel('SKU 1')).toHaveValue('');
+  expect(stored()).toEqual(['', '']);
+  // ใบที่ยืนยันแล้ว (ล็อก) ไม่ถูกแตะ
+  expect(api.sb.db.events.filter(e => e.order_id === api.rows.confirmed.id)).toHaveLength(0);
+});

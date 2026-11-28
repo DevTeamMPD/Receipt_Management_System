@@ -61,7 +61,7 @@ export function sanitizeItems(items) {
   if (!Array.isArray(items) || items.length > 50) throw new ApiError(422, 'รายการสินค้าไม่ถูกต้อง');
   return items.map(i => {
     const t = k => (typeof i?.[k] === 'string' ? i[k].trim().slice(0, 200) : '');
-    return { product: t('product'), size: t('size'), color: t('color') };
+    return { product: t('product'), size: t('size'), color: t('color'), sku: t('sku').slice(0, 100) };
   });
 }
 
@@ -81,7 +81,7 @@ export function mapRow(r, imageUrl = '', codeById = {}) {
     id: r.id, code: r.code, billNumber: r.bill_number || '', orderDate: r.order_date || '', customerName: r.customer_name || '', phone: r.phone || '',
     address: r.address || '', subDistrict: r.sub_district || '', district: r.district || '', province: r.province || '', postcode: r.postcode || '',
     shipDate: r.ship_date || '', remark: r.remark || '', total: num(r.total), posNumber: r.pos_number || '', posTotal: num(r.pos_total),
-    items: (r.receipt_order_items || []).slice().sort((a, b) => a.position - b.position).map(i => ({ product: i.product, size: i.size, color: i.color })),
+    items: (r.receipt_order_items || []).slice().sort((a, b) => a.position - b.position).map(i => ({ product: i.product, size: i.size, color: i.color, sku: i.sku || '' })),
     branch: r.branch, source: r.source || 'upload', sender: r.sender_name || '', receivedAt: r.received_at, confidence: r.ocr_confidence, uncertain: r.ocr_uncertain || [],
     ocrProvider: r.ocr_provider || '', ocrStatus: r.ocr_status, ocrRaw: r.ocr_raw_text || '', ocrOriginal: r.ocr_original || null,
     duplicateOf: (r.duplicate_of && codeById[r.duplicate_of]) || '', rejectReason: r.reject_reason || '', status: statusOf(r), version: r.version, imageUrl,

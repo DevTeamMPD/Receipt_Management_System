@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { ocrStatus, runOcr } from './ocr/handler.js';
 import { OcrError } from './ocr/providers.js';
 import { mapRow } from './orders.js';
+import { loadSkuMemory } from './sku.js';
+import { fillSkus } from '../src/sku.js';
 
 // สร้างใบสั่งซื้อจากรูป — ใช้ร่วมกันทั้งการอัปโหลดจากหน้าเว็บและรูปจากกลุ่ม LINE (ctx.auth = ผู้ใช้หรือบัญชีระบบของ LINE)
 export const BUCKET = 'receipt-images';
@@ -47,6 +49,13 @@ export async function dupCodeOf(ctx, dupId) {
   return dupId ? (await ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?select=code&id=eq.${dupId}&limit=1`))?.[0]?.code : '';
 }
 
+// รายการสินค้าจากผล OCR เป็นแถวของฐานข้อมูล พร้อม SKU ที่เคยกรอกไว้กับชุด สินค้า+ขนาด+สี เดียวกัน
+export async function itemRowsFromOcr(ctx, orderId, ocrItems) {
+  if (!ocrItems?.length) return [];
+  const { items } = fillSkus(ocrItems, await loadSkuMemory(ctx));
+  return items.map((i, n) => ({ order_id: orderId, position: n, product: i.product, size: i.size, color: i.color, sku: i.sku || null }));
+}
+
 // run = ผลจาก readImage (null = ไม่ได้ใช้ OCR) · imagePath = รูปที่เก็บไว้แล้ว (LINE) ไม่งั้นอัปโหลด bytes ให้
 export async function insertOrder(ctx, { bytes, mime, imagePath, branch, source, senderName, run }) {
   const { db, auth, env } = ctx;
@@ -66,11 +75,12 @@ export async function insertOrder(ctx, { bytes, mime, imagePath, branch, source,
     ocr_uncertain: x ? x.uncertain : [], ocr_original: x ? Object.fromEntries(OCR_FIELD_KEYS.map(k => [k, x[k]])) : null, ocr_raw_text: x?.rawText || null, duplicate_of: dupId, created_by: auth.user.id,
   };
   const [saved] = await db.rest(auth.token, 'POST', 'receipt_orders', { body: row, prefer: 'return=representation' });
-  const items = (x?.items || []).map((i, n) => ({ order_id: id, position: n, product: i.product, size: i.size, color: i.color }));
+  const items = await itemRowsFromOcr(ctx, id, x?.items);
   if (items.length) await db.rest(auth.token, 'POST', 'receipt_order_items', { body: items });
   if (run) await logOcrRun(ctx, id, status.provider, run);
   await logEvent(ctx, id, 'created', { source, ocr: row.ocr_status });
   const urls = await db.sign(auth.token, BUCKET, [path]);
   const order = mapRow({ ...saved, receipt_order_items: items }, urls[path] || '', dupId ? { [dupId]: await dupCodeOf(ctx, dupId) } : {});
+  order.items = order.items.map(i => (i.sku ? { ...i, skuAuto: true } : i)); // SKU ตอนสร้างใบมาจากความจำทั้งหมด — ให้หน้าเว็บบอกคนตรวจ
   return { id, order };
 }

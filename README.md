@@ -13,7 +13,7 @@
 
 - เบราว์เซอร์ไม่คุยกับฐานข้อมูลโดยตรง และไม่มีคีย์ใด ๆ — ล็อกอินแล้วได้คุกกี้ HttpOnly
 - API ใช้ **สิทธิ์ของผู้ใช้ที่ล็อกอิน** ติดต่อ Supabase (ไม่ใช้คีย์ service role) และฐานข้อมูลตรวจสิทธิ์ซ้ำด้วย RLS: ใช้ได้เฉพาะคนที่อยู่ในตาราง `receipt_users` และเปิดใช้งานอยู่
-- ตารางทั้งหมดขึ้นต้นด้วย `receipt_` (SQL อยู่ใน `db/` — รันตามลำดับ `receipt_desk_schema_v1.sql`, `receipt_desk_access_v1.sql`, `receipt_desk_delete_v1.sql`, `receipt_desk_delete_v2.sql`, `receipt_desk_line_v1.sql`, `receipt_desk_line_v2.sql`, `receipt_desk_branches_v1.sql`, `receipt_desk_settings_v1.sql`)
+- ตารางทั้งหมดขึ้นต้นด้วย `receipt_` (SQL อยู่ใน `db/` — รันตามลำดับ `receipt_desk_schema_v1.sql`, `receipt_desk_access_v1.sql`, `receipt_desk_delete_v1.sql`, `receipt_desk_delete_v2.sql`, `receipt_desk_line_v1.sql`, `receipt_desk_line_v2.sql`, `receipt_desk_branches_v1.sql`, `receipt_desk_settings_v1.sql`, `receipt_desk_sku_v1.sql`)
 
 ## สถานะใบสั่งซื้อ
 
@@ -65,6 +65,15 @@ npm run dev
 - ตั้ง environment variables ตามตารางด้านบนใน Vercel (อย่าตั้ง `OCR_ALLOW_MOCK`) แล้ว deploy
 - คุกกี้ใช้ `Secure` อัตโนมัติเมื่ออยู่หลัง https
 - ขนาดรูปที่ส่งต้องไม่เกินประมาณ 4.5MB (ขีดจำกัดของ Vercel) — เบราว์เซอร์ย่อรูปให้อยู่ในเกณฑ์แล้ว
+
+## SKU ของรายการสินค้า
+
+- แต่ละรายการสินค้ามีช่อง **SKU** (เก็บใน `receipt_order_items.sku` ซึ่งมีมาตั้งแต่ schema v1) ไม่บังคับกรอก — หน้ายืนยันบอกจำนวนรายการที่ยังไม่มี SKU
+- **ระบบจำ SKU ตามชุด สินค้า + ขนาด + สี** (ตาราง `receipt_sku_memory` — รัน `db/receipt_desk_sku_v1.sql`; คีย์ไม่สนช่องว่างและตัวพิมพ์ ดู `src/sku.js`): กรอกครั้งเดียว ใบถัดไปที่มีชุดเดียวกันถูกเติมให้
+  - ใบใหม่ (อัปโหลด / LINE / อ่านรูปใหม่): เซิร์ฟเวอร์เติมและบันทึกตั้งแต่สร้างใบ
+  - ใบที่รอตรวจอยู่ก่อนแล้ว: เติมตอนเปิดใบ (ช่องสีเขียว = ระบบเติมให้ แก้ได้) · แก้สินค้า/ขนาด/สี แล้ว SKU ที่ระบบเติมเปลี่ยนตามชุดใหม่ · SKU ที่คนพิมพ์เองไม่ถูกแตะ
+  - พิมพ์ SKU ทับ = จำค่าใหม่แทนค่าเดิม · ลบ SKU ออกจากรายการไม่ได้ลบความจำ · แก้ช่องอื่นของใบเก่าไม่ทำให้ SKU เก่ากลับมาทับของใหม่
+- ยังไม่รัน SQL = ช่อง SKU กรอกและบันทึกได้ตามปกติ แค่ระบบยังไม่จำ
 
 ## OCR
 

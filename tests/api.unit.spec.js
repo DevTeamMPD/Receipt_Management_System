@@ -236,3 +236,61 @@ test('delete removes a pending order and its image, keeps the audit event, and r
   expect(locked.body.code).toBe('locked');
   expect(c.sb.db.orders.find(x => x.id === o2.id)).toBeDefined();
 });
+
+// ---------- SKU ของรายการสินค้า + ความจำ SKU ----------
+const itemsOf = (c, id) => c.sb.db.items.filter(i => i.order_id === id).sort((a, b) => a.position - b.position);
+
+test('a SKU typed on an item is saved and remembered, and the next order with the same product, size and colour gets it automatically', async () => {
+  const c = client();
+  c.sb.db.receipt_sku_memory = [];
+  await login(c);
+  const first = (await upload(c)).body.order;
+  expect(first.items[0]).toMatchObject({ sku: '' });
+  const [it] = first.items;
+  expect((await c.call('PATCH', `/api/orders/${first.id}`, { version: first.version, fields: {}, items: [{ ...it, sku: ' BP-PLAY-L6-BL ' }] })).status).toBe(200);
+  expect(itemsOf(c, first.id)[0].sku).toBe('BP-PLAY-L6-BL');
+  expect(c.sb.db.receipt_sku_memory).toEqual([expect.objectContaining({ product: it.product, size: it.size, color: it.color, sku: 'BP-PLAY-L6-BL' })]);
+
+  // ใบใหม่ (รูปเดิม → โหมดสาธิตให้สินค้าชุดเดิม): SKU ถูกเติมและบันทึกตั้งแต่สร้างใบ พร้อมบอกหน้าเว็บว่าระบบเติมให้
+  const second = (await upload(c)).body.order;
+  expect(second.items[0]).toMatchObject({ product: it.product, sku: 'BP-PLAY-L6-BL', skuAuto: true });
+  expect(itemsOf(c, second.id)[0].sku).toBe('BP-PLAY-L6-BL');
+  // รายการ + ความจำส่งให้หน้าเว็บใช้เติมใบที่ค้างอยู่
+  const list = (await c.call('GET', '/api/orders')).body;
+  expect(Object.values(list.skus)).toEqual(['BP-PLAY-L6-BL']);
+  expect(list.orders.find(o => o.id === second.id).items[0].sku).toBe('BP-PLAY-L6-BL');
+});
+
+test('SKU memory ignores spacing and letter case, keeps the newest SKU, and old orders do not bring an old SKU back', async () => {
+  const c = client();
+  c.sb.db.receipt_sku_memory = [];
+  await login(c);
+  const a = (await upload(c)).body.order;
+  const b = (await upload(c)).body.order;
+  const row = { product: 'คอกกั้นเด็ก', size: 'L 6 ฟุต (1.9x1.9 เมตร)', color: 'ฟ้า ชมพู ขาว' };
+  await c.call('PATCH', `/api/orders/${a.id}`, { version: a.version, fields: {}, items: [{ ...row, sku: 'OLD-1' }] });
+  // เว้นวรรค/ตัวพิมพ์ต่างกัน = ชุดเดียวกัน · SKU ใหม่ทับของเก่า
+  await c.call('PATCH', `/api/orders/${b.id}`, { version: b.version, fields: {}, items: [{ product: ' คอกกั้นเด็ก', size: 'l 6ฟุต (1.9X1.9 เมตร)', color: 'ฟ้า  ชมพู ขาว', sku: 'NEW-2' }] });
+  expect(c.sb.db.receipt_sku_memory).toHaveLength(1);
+  expect(c.sb.db.receipt_sku_memory[0].sku).toBe('NEW-2');
+  // แก้ช่องอื่นของใบเก่า (SKU เดิมไม่ได้เปลี่ยน) ต้องไม่ทำให้ระบบกลับไปจำ OLD-1
+  const a2 = await c.call('PATCH', `/api/orders/${a.id}`, { version: a.version + 1, fields: { remark: 'โทรก่อนส่ง' }, items: [{ ...row, sku: 'OLD-1' }, { product: 'เบาะ PU', size: '', color: '', sku: '' }] });
+  expect(a2.status).toBe(200);
+  expect(c.sb.db.receipt_sku_memory[0].sku).toBe('NEW-2');
+  // ลบ SKU ออกจากรายการ ไม่ได้ลบความจำ
+  await c.call('PATCH', `/api/orders/${a.id}`, { version: a2.body.version, fields: {}, items: [{ ...row, sku: '' }] });
+  expect(itemsOf(c, a.id)[0].sku).toBeFalsy();
+  expect(c.sb.db.receipt_sku_memory[0].sku).toBe('NEW-2');
+});
+
+test('before the SKU memory table exists, SKUs can still be typed and saved; nothing is auto-filled and nothing fails', async () => {
+  const c = client();
+  await login(c);
+  const o = (await upload(c)).body.order;
+  const saved = await c.call('PATCH', `/api/orders/${o.id}`, { version: o.version, fields: {}, items: [{ ...o.items[0], sku: 'X-1' }] });
+  expect(saved.status).toBe(200);
+  expect(itemsOf(c, o.id)[0].sku).toBe('X-1');
+  const next = (await upload(c)).body.order;
+  expect(next.items[0].sku).toBe('');
+  expect((await c.call('GET', '/api/orders')).body.skus).toEqual({});
+});
