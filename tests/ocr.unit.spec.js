@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test';
 import { parseDateText, parseAmount, parsePhone, normalizeExtraction } from '../server/ocr/normalize.js';
 import { geminiModels, geminiProvider, typhoonProvider, parseJsonLoose, OcrError, fixTyphoonFields } from '../server/ocr/providers.js';
 import { runOcr, ocrStatus } from '../server/ocr/handler.js';
+import { resolveThaiAddress } from '../server/ocr/thaiAddress.js';
+import THAI_POSTCODES from '../server/ocr/thaiPostcodes.js';
 
 const NOW = new Date('2026-11-25T00:00:00Z');
 const good = {
@@ -376,4 +378,78 @@ test('the admin-picked reader overrides OCR_PROVIDER; unknown, keyless or missin
   await applyOcrSetting(ctx);
   expect(ocrStatus(ctx.env)).toMatchObject({ provider: 'typhoon', backup: 'gemini', configured: true });
   expect(ocrStatus(env)).toMatchObject({ provider: 'gemini', backup: 'typhoon', available: { gemini: true, typhoon: true } });
+});
+
+// ---------- ที่อยู่: ยึดรหัสไปรษณีย์เป็นหลัก ----------
+const addr = (subDistrict, district, province, postcode) => resolveThaiAddress({ subDistrict, district, province, postcode });
+
+test('the postcode narrows the area, so misread handwriting snaps to the real place names', () => {
+  // สะกดเพี้ยนเล็กน้อย + คำนำหน้า + ชื่อย่อจังหวัด → ชื่อจริงในพื้นที่ของรหัส โดยไม่ต้องไฮไลต์
+  expect(addr('บางนาเหนิอ', 'บางบา', 'กทม.', '10260')).toEqual({ subDistrict: 'บางนาเหนือ', district: 'บางนา', province: 'กรุงเทพมหานคร', postcode: '10260', uncertain: [] });
+  expect(addr('ต.บางพลีใหย่', 'อ.บางพลี', 'จ.สมุทรปรากาน', '10540')).toMatchObject({ subDistrict: 'บางพลีใหญ่', district: 'บางพลี', province: 'สมุทรปราการ', uncertain: [] });
+  // "อ.เมือง" และชื่อจังหวัดแบบย่อ ถูกเติมให้เต็มจากรหัส
+  expect(addr('สวนใหญ่', 'เมือง', 'นนทบุรี', '11000')).toMatchObject({ district: 'เมืองนนทบุรี', province: 'นนทบุรี', uncertain: [] });
+  expect(addr('ประตูชัย', 'พระนครศรีอยุธยา', 'อยุธยา', '13000')).toMatchObject({ province: 'พระนครศรีอยุธยา', uncertain: [] });
+  // อ่านอำเภอ/จังหวัดไม่ออกเลย → เดาจากรหัส (รหัสนี้มีอำเภอเดียว จังหวัดเดียว)
+  expect(addr('', '', '', '11000')).toMatchObject({ district: 'เมืองนนทบุรี', province: 'นนทบุรี', uncertain: [] });
+});
+
+test('a correct address is never changed or flagged, including old sub-district names that were later split', () => {
+  expect(addr('บางจาก', 'พระโขนง', 'กรุงเทพมหานคร', '10260').uncertain).toEqual([]);
+  // ตำบลชื่อเกือบเหมือนกันในรหัสเดียวกัน: สะกดตรงตัวไหนใช้ตัวนั้น
+  expect(addr('ห้วยราช', 'ห้วยราช', 'บุรีรัมย์', '31000')).toMatchObject({ subDistrict: 'ห้วยราช', uncertain: [] });
+  expect(addr('ห้วยราชา', 'ห้วยราช', 'บุรีรัมย์', '31000')).toMatchObject({ subDistrict: 'ห้วยราชา', uncertain: [] });
+  // "แขวงบางนา" ถูกแบ่งเป็น บางนาเหนือ/บางนาใต้ — เลือกแทนไม่ได้ คงตามที่เขียน ไม่ไฮไลต์
+  expect(addr('บางนา', 'บางนา', 'กรุงเทพมหานคร', '10260')).toEqual({ subDistrict: 'บางนา', district: 'บางนา', province: 'กรุงเทพมหานคร', postcode: '10260', uncertain: [] });
+});
+
+test('when the words cannot be matched inside the postcode area they are kept and highlighted, never silently guessed', () => {
+  const junk = addr('กขคงจ', '', '', '10260');
+  expect(junk).toMatchObject({ subDistrict: 'กขคงจ', province: 'กรุงเทพมหานคร' }); // จังหวัดยังเดาจากรหัสได้ · เขตมีสองตัวเลือก จึงไม่เดา
+  expect(junk.district).toBe('');
+  expect(junk.uncertain).toEqual(['subDistrict']);
+  // แก้ได้แต่เหมือนไม่มาก → แก้ให้และไฮไลต์ไว้ตรวจ
+  const weak = addr('พระขนต', 'พระโขนง', 'กรุงเทพมหานคร', '10260');
+  expect(weak.subDistrict).toBe('พระโขนงใต้');
+  expect(weak.uncertain).toEqual(['subDistrict']);
+});
+
+test('a postcode that disagrees with clearly written names is treated as the misread part, and always highlighted', () => {
+  // รหัสผิดหลักเดียว (10250 ↔ 10260) และชื่อตรงกับพื้นที่จริง → แก้รหัสตามชื่อ
+  expect(addr('บางจาก', 'พระโขนง', 'กรุงเทพฯ', '10250')).toEqual({ subDistrict: 'บางจาก', district: 'พระโขนง', province: 'กรุงเทพมหานคร', postcode: '10260', uncertain: ['postcode'] });
+  // รหัสขาดหนึ่งหลัก → เติมจากชื่อ
+  expect(addr('ลาดพร้าว', 'ลาดพร้าว', 'กรุงเทพมหานคร', '1023')).toMatchObject({ postcode: '10230', uncertain: ['postcode'] });
+  // รหัสห่างจากชื่อมาก → ไม่แตะรหัส ไม่ทับชื่อด้วยพื้นที่ของรหัส
+  expect(addr('ศรีราชา', 'ศรีราชา', 'ชลบุรี', '10260')).toEqual({ subDistrict: 'ศรีราชา', district: 'ศรีราชา', province: 'ชลบุรี', postcode: '10260', uncertain: ['postcode'] });
+  // จังหวัดชัดว่าเป็นที่อื่น แต่ตำบล/อำเภออ่านไม่ออก → ไม่เดา ให้ตรวจทั้งจังหวัดและรหัส
+  expect(addr('', '', 'เชียงใหม่', '10260')).toEqual({ subDistrict: '', district: '', province: 'เชียงใหม่', postcode: '10260', uncertain: ['province', 'postcode'] });
+  // รหัส 5 หลักที่ไม่มีในประเทศ
+  expect(addr('บางนา', 'บางนา', 'กรุงเทพมหานคร', '99999').uncertain).toEqual(['postcode']);
+  // ไม่มีรหัสเลย → ไม่เติมรหัสเอง (ช่องว่างถูกจับโดยกฎตรวจอยู่แล้ว)
+  expect(addr('บางจาก', 'พระโขนง', 'กรุงเทพมหานคร', '')).toMatchObject({ postcode: '', uncertain: [] });
+});
+
+test('every real sub-district passes through unchanged with its own postcode', () => {
+  let checked = 0;
+  for (const row of THAI_POSTCODES) {
+    const [province, district, tambons] = row.split('|');
+    for (const part of tambons.split(',')) {
+      const [subDistrict, zips] = part.split('=');
+      for (const postcode of zips.split('/')) {
+        expect(resolveThaiAddress({ subDistrict, district, province, postcode })).toEqual({ subDistrict, district, province, postcode, uncertain: [] });
+        checked += 1;
+      }
+    }
+  }
+  expect(checked).toBeGreaterThan(7400);
+});
+
+test('OCR results come back with the address corrected from the postcode and the doubtful parts marked', () => {
+  const fixed = normalizeExtraction({ ...good, subDistrict: 'แขวงบางจาค', district: 'เขตพระโขนง', province: 'กทม', postcode: '๑๐๒๖๐' }, NOW);
+  expect(fixed).toMatchObject({ subDistrict: 'บางจาก', district: 'พระโขนง', province: 'กรุงเทพมหานคร', postcode: '10260', uncertain: [], confidence: 98 });
+  const doubt = normalizeExtraction({ ...good, subDistrict: 'อ่านไม่ออก', district: '', province: '' }, NOW);
+  expect(doubt).toMatchObject({ subDistrict: 'อ่านไม่ออก', district: '', province: 'กรุงเทพมหานคร' });
+  expect(doubt.uncertain.sort()).toEqual(['district', 'subDistrict']);
+  // สิ่งที่โมเดลบอกว่าไม่แน่ใจยังถูกไฮไลต์เหมือนเดิม แม้ที่อยู่จะตรงกับรหัส
+  expect(normalizeExtraction({ ...good, uncertain: ['subDistrict'] }, NOW).uncertain).toEqual(['subDistrict']);
 });
