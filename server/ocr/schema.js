@@ -12,6 +12,8 @@ Rules:
 - Dates: copy exactly as written (for example "14/7/69" or "13 พ.ค. 69"). Do not convert Buddhist/Gregorian years. The order date is the "วันที่สั่งซื้อ" box at the top right.
 - phone: the customer's phone number as written.
 - address = house number / soi / road only; put sub-district (แขวง/ตำบล), district (เขต/อำเภอ), province and postcode in their own fields.
+- postcode: the 5-digit postal code written at the end of the address. Read it digit by digit and copy all five digits; the office system uses it to check the area names.
+- subDistrict, district, province: copy the handwritten letters as you see them, even when the result is not a place name you know. Do not replace them with a different place name — the system matches them against the postcode itself.
 - address: include EVERY handwritten address line (forms often continue the address on a second line under the first). Keep house numbers like "168/28".
 - items: the usual form ("Central x Bebeplay") is a table of product rows, each with "size" / "สี" (color) / "แบบ" sub-rows of checkboxes.
   Rows usually include: คอกกั้นเด็ก, เบาะ PU size, ของเล่น ชิงช้า, ของเล่น สไลเดอร์ (with an extra "แผ่นเสริมสไลเดอร์" box), เก้าอี้ High Chair (with อุปกรณ์เสริม), เตียงนอน 7 in 1, รถเข็น, Adventure สไลเดอร์, ไวท์บอร์ด+เก้าอี้ รุ่น Scribble, ม้าโยก 2in1 Foal.

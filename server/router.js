@@ -3,7 +3,8 @@ import { COOKIE, parseCookies, decodeSession, tokenExpiry, setCookie, clearCooki
 import { ocrStatus, parseImageDataUrl, OCR_CHOICES } from './ocr/handler.js';
 import { applyOcrSetting } from './ocrSetting.js';
 import { BRANCH_MAX, ORDER_SELECT, cleanBranchName, loadBranches, mapRow, sanitizeItems, sanitizePatch, sortBranches } from './orders.js';
-import { BUCKET, OCR_FIELD_KEYS, dupCodeOf, findDuplicate, insertOrder, logEvent, logOcrRun, needsCheckFor, ocrDataColumns, readImage } from './orderCreate.js';
+import { BUCKET, OCR_FIELD_KEYS, dupCodeOf, findDuplicate, insertOrder, itemRowsFromOcr, logEvent, logOcrRun, needsCheckFor, ocrDataColumns, readImage } from './orderCreate.js';
+import { loadSkuMemory, rememberSkus } from './sku.js';
 import { validate } from '../src/validation.js';
 import { timingSafeEqual } from 'node:crypto';
 import { MAX_ATTEMPTS, claimWaitingForGroup, processDueInbox, processNow } from './lineIngest.js';
@@ -65,10 +66,14 @@ async function logout(ctx) {
 const me = async ctx => ok({ user: ctx.auth.user, ...(await configOf(ctx, ctx.auth.token)) });
 
 async function listOrders(ctx) {
-  const rows = await ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?${ORDER_SELECT}&order=created_at.desc&limit=300`);
+  const [rows, skus] = await Promise.all([
+    ctx.db.rest(ctx.auth.token, 'GET', `receipt_orders?${ORDER_SELECT}&order=created_at.desc&limit=300`),
+    loadSkuMemory(ctx),
+  ]);
   const urls = await ctx.db.sign(ctx.auth.token, BUCKET, rows.map(r => r.image_path).filter(Boolean));
   const codeById = Object.fromEntries(rows.map(r => [r.id, r.code]));
-  return ok({ orders: rows.map(r => mapRow(r, urls[r.image_path] || '', codeById)) });
+  // skus = SKU ที่จำไว้ (คีย์จาก skuKey) ให้หน้าเว็บเติมใบที่ยังไม่มี SKU
+  return ok({ orders: rows.map(r => mapRow(r, urls[r.image_path] || '', codeById)), skus });
 }
 
 async function createOrder(ctx) {
@@ -121,7 +126,7 @@ async function retryOcr(ctx) {
   if (!rows?.length) throw new ApiError(409, 'ใบนี้ถูกแก้หรือเปลี่ยนสถานะไปแล้ว กรุณาโหลดใหม่', { code: 'conflict' });
   let items = cur.receipt_order_items || [];
   if (!items.length && x.items.length) {
-    items = x.items.map((i, n) => ({ order_id: id, position: n, product: i.product, size: i.size, color: i.color }));
+    items = await itemRowsFromOcr(ctx, id, x.items);
     await db.rest(auth.token, 'POST', 'receipt_order_items', { body: items });
   }
   const order = mapRow({ ...rows[0], receipt_order_items: items }, urls[cur.image_path] || '', dupId ? { [dupId]: await dupCodeOf(ctx, dupId) } : {});
@@ -133,7 +138,11 @@ async function saveOrder(ctx) {
   const b = ctx.body || {};
   const fields = sanitizePatch(b.fields || {});
   const items = b.items === undefined ? null : sanitizeItems(b.items);
+  // SKU ที่กรอก/แก้ในครั้งนี้จะถูกจำไว้ใช้กับใบถัดไป — อ่านรายการเดิมก่อนบันทึกเพื่อรู้ว่าอันไหนเพิ่งเปลี่ยน
+  const learn = !!items?.some(i => i.sku);
+  const before = learn ? await ctx.db.rest(ctx.auth.token, 'GET', `receipt_order_items?select=product,size,color,sku&order_id=eq.${id}`).catch(() => []) : [];
   const version = await ctx.db.rpc(ctx.auth.token, 'receipt_save_order', { p_id: id, p_version: asVersion(b.version), p_fields: fields, p_items: items });
+  if (learn) await rememberSkus(ctx, before, items);
   const last = await ctx.db.rest(ctx.auth.token, 'GET', `receipt_events?select=action,actor,created_at&order_id=eq.${id}&order=created_at.desc&limit=1`).catch(() => []);
   const recent = last?.[0]?.action === 'edited' && last[0].actor === ctx.auth.user.id && ctx.now.getTime() - new Date(last[0].created_at).getTime() < EDIT_LOG_WINDOW_MS;
   if (!recent) await logEvent(ctx, id, 'edited', { fields: [...Object.keys(b.fields || {}), ...(items ? ['items'] : [])] });

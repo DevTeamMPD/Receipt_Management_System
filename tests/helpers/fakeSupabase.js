@@ -18,7 +18,7 @@ export function fakeSupabase() {
   const issue = (u, expSec = FUTURE) => { const a = jwt(u.id, expSec); const r = `r-${u.id}-${Object.keys(refreshTokens).length}`; tokens[a] = u; refreshTokens[r] = u; return { access_token: a, refresh_token: r, user: { id: u.id } }; };
   const res = (status, json) => ({ ok: status < 400, status, text: async () => (json === undefined ? '' : JSON.stringify(json)) });
   const matches = (row, params) => [...params].every(([k, v]) => {
-    if (['select', 'order', 'limit', 'receipt_order_items.order'].includes(k)) return true;
+    if (['select', 'order', 'limit', 'offset', 'on_conflict', 'receipt_order_items.order'].includes(k)) return true;
     if (v === 'is.null') return row[k] == null;
     if (v === 'not.is.null') return row[k] != null;
     if (!(k in row)) return true;
@@ -79,7 +79,9 @@ export function fakeSupabase() {
       // ตารางค่าตั้ง (ตัวอ่าน OCR) — เหมือนตารางสาขา: ยังไม่มีจนเทสต์ตั้ง db.receipt_settings · เขียนได้เฉพาะผู้ดูแล
       if (t === 'receipt_settings' && !db.receipt_settings) return res(404, { code: 'PGRST205', message: 'Could not find the table' });
       if (t === 'receipt_settings' && method !== 'GET' && usr.role !== 'admin') return res(403, { code: '42501', message: 'row-level security' });
-      const KEYS = { receipt_line_groups: 'group_id', receipt_line_inbox: 'message_id', receipt_branches: 'name', receipt_settings: 'key' };
+      // ตารางความจำ SKU — ยังไม่มีจนเทสต์ตั้ง db.receipt_sku_memory (เหมือนก่อนรัน migration)
+      if (t === 'receipt_sku_memory' && !db.receipt_sku_memory) return res(404, { code: 'PGRST205', message: 'Could not find the table' });
+      const KEYS = { receipt_line_groups: 'group_id', receipt_line_inbox: 'message_id', receipt_branches: 'name', receipt_settings: 'key', receipt_sku_memory: 'combo_key' };
       if (KEYS[t]) {
         const rows = (db[t] ||= []);
         if (method === 'GET') return res(200, rows.filter(r => matches(r, u.searchParams)));
@@ -90,7 +92,7 @@ export function fakeSupabase() {
             if (dup) { if (String(init.headers?.prefer || '').includes('merge-duplicates')) { Object.assign(dup, r); out.push(dup); } continue; }
             const row = t === 'receipt_line_inbox'
               ? { id: `10000000-0000-4000-8000-${String(rows.length + 1).padStart(12, '0')}`, status: 'pending', attempts: 0, image_path: null, sender_name: null, order_id: null, last_error: null, created_at: NOW.toISOString(), updated_at: NOW.toISOString(), ...r }
-              : t === 'receipt_branches' || t === 'receipt_settings' ? (t === 'receipt_branches' ? { active: true, ...r } : { ...r }) : { active: true, branch: null, group_name: '', ...r };
+              : t === 'receipt_branches' || t === 'receipt_settings' || t === 'receipt_sku_memory' ? (t === 'receipt_branches' ? { active: true, ...r } : { ...r }) : { active: true, branch: null, group_name: '', ...r };
             rows.push(row); out.push(row);
           }
           return res(201, out);
@@ -101,6 +103,7 @@ export function fakeSupabase() {
           return res(200, hit);
         }
       }
+      if (t === 'receipt_order_items' && method === 'GET') return res(200, db.items.filter(i => matches(i, u.searchParams)));
       if (t === 'receipt_order_items' && method === 'POST') { db.items.push(...[].concat(body)); return res(201, null); }
       if (t === 'receipt_events') {
         if (method === 'POST') { db.events.push({ ...body, created_at: NOW.toISOString() }); return res(201, null); }

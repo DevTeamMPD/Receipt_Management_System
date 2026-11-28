@@ -1,4 +1,5 @@
 import { validate } from '../../src/validation.js';
+import { resolveThaiAddress } from './thaiAddress.js';
 
 const thaiDigits = s => s.replace(/[๐-๙]/g, d => String('๐๑๒๓๔๕๖๗๘๙'.indexOf(d)));
 const text = v => (v == null ? '' : String(v)).replace(/\s+/g, ' ').trim();
@@ -70,13 +71,16 @@ export function normalizeExtraction(raw, now = new Date(), { alsoUncertain = [] 
     posNumber: text(r.posNumber),
     posTotal: parseAmount(r.posTotal),
   };
+  // ที่อยู่ลายมืออ่านยาก: ใช้รหัสไปรษณีย์จำกัดพื้นที่ แล้วแก้ตำบล/อำเภอ/จังหวัดให้ตรงชื่อจริง — ช่องที่ยังไม่มั่นใจถูกไฮไลต์ให้ตรวจ
+  const area = resolveThaiAddress(rec);
+  Object.assign(rec, { subDistrict: area.subDistrict, district: area.district, province: area.province, postcode: area.postcode });
   const docType = ['order_form', 'receipt_only', 'other'].includes(r.docType) ? r.docType : 'other';
   const declared = (Array.isArray(r.uncertain) ? r.uncertain : []).map(k => NAME_MAP[text(k)] || text(k));
   const failed = Object.keys(validate(rec));
   // วันที่ที่เขียนไว้แต่แปลงไม่ได้ ถือว่าไม่แน่ใจ (ช่องจัดส่งเว้นว่างได้)
   if (text(r.shipDateText) && !rec.shipDate) failed.push('shipDate');
   const known = new Set(Object.keys(rec));
-  const uncertain = [...new Set([...declared, ...failed, ...alsoUncertain])].filter(k => known.has(k));
+  const uncertain = [...new Set([...declared, ...failed, ...area.uncertain, ...alsoUncertain])].filter(k => known.has(k));
   let confidence = Math.max(35, 98 - 9 * uncertain.length);
   if (docType !== 'order_form') confidence = Math.min(confidence, 50);
   return { ...rec, docType, formTitle: text(r.formTitle), uncertain, confidence };

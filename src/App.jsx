@@ -7,8 +7,9 @@ import LineGroups from './LineGroups.jsx';
 import OcrSettings from './OcrSettings.jsx';
 import { formatReceived, isPending, monthNames, money, statusLabels, thaiDate } from './data.js';
 import { validate, warnings, fieldOrder } from './validation.js';
+import { fillSkus, skuKey } from './sku.js';
 
-const emptyItem = () => ({ product: '', size: '', color: '' });
+const emptyItem = () => ({ product: '', size: '', color: '', sku: '' });
 const LAYOUT_KEY = 'receipt-desk-layout-v1';
 const readPhone = () => { try { return localStorage.getItem(LAYOUT_KEY) === 'phone'; } catch { return false; } };
 const SAVE_DELAY_MS = 800;
@@ -150,6 +151,10 @@ export default function App() {
   const pending = useRef({});
   const timers = useRef({});
   const inflight = useRef({});
+  // SKU ที่จำไว้ (สินค้า+ขนาด+สี → SKU) จากเซิร์ฟเวอร์ + ที่เพิ่งพิมพ์ในหน้านี้ · skuCleared = แถวที่คนลบ SKU ออกเอง (ไม่เติมกลับ)
+  const skuMemory = useRef({});
+  const skuCleared = useRef(new Set());
+  const [skuReady, setSkuReady] = useState(false);
 
   const mutate = useCallback(fn => { ordersRef.current = fn(ordersRef.current); setOrders(ordersRef.current); }, []);
   const setSave = useCallback((id, state, message = '') => setSaves(s => ({ ...s, [id]: { state, message } })), []);
@@ -166,12 +171,17 @@ export default function App() {
   // ---- โหลด/รีเฟรชรายการ (ไม่ทับใบที่มีการแก้ไขที่ยังไม่บันทึก)
   const refresh = useCallback(async () => {
     try {
-      const { orders: fresh } = await api.orders();
+      const { orders: fresh, skus = {} } = await api.orders();
+      const unsaved = Object.values(pending.current).some(Boolean) || Object.keys(inflight.current).length > 0;
+      skuMemory.current = unsaved ? { ...skus, ...skuMemory.current } : skus; // ที่เพิ่งพิมพ์และยังไม่ถึงเซิร์ฟเวอร์ต้องไม่หาย
+      setSkuReady(true);
       const local = new Map(ordersRef.current.map(o => [o.id, o]));
       mutate(() => fresh.map(o => {
         const l = local.get(o.id);
         const dirty = pending.current[o.id] || inflight.current[o.id];
-        return l && dirty ? { ...o, ...l, imageUrl: o.imageUrl || l.imageUrl } : o;
+        if (l && dirty) return { ...o, ...l, imageUrl: o.imageUrl || l.imageUrl };
+        // คงเครื่องหมาย "ระบบเติม SKU ให้" ไว้หลังรีเฟรช (เซิร์ฟเวอร์ไม่ได้เก็บเครื่องหมายนี้)
+        return l?.items.some(it => it.skuAuto) ? { ...o, items: o.items.map((it, i) => (l.items[i]?.skuAuto && l.items[i].sku === it.sku ? { ...it, skuAuto: true } : it)) } : o;
       }));
       setLoadError(''); setLoaded(true);
     } catch (e) { if (!handleAuthError(e)) { setLoadError(e.message); setLoaded(true); } }
@@ -209,8 +219,10 @@ export default function App() {
           setSave(id, pending.current[id] ? 'dirty' : 'saved');
         } catch (e) {
           if (handleAuthError(e)) return;
+          // การเติม SKU อัตโนมัติชนกับการแก้ของคนอื่น: ไม่ใช่สิ่งที่ผู้ใช้พิมพ์ → ทิ้งเงียบ ๆ แล้วโหลดข้อมูลล่าสุด
+          if (e.code === 'conflict' && p.auto && !pending.current[id]) { setSave(id, 'saved'); setTimeout(refresh, 0); return; }
           if (e.code === 'conflict' || e.code === 'locked') { pending.current[id] = null; setSave(id, 'conflict', e.message); return; }
-          pending.current[id] = { fields: { ...p.fields, ...(pending.current[id]?.fields || {}) }, items: pending.current[id]?.items || p.items };
+          pending.current[id] = { fields: { ...p.fields, ...(pending.current[id]?.fields || {}) }, items: pending.current[id]?.items || p.items, auto: p.auto && (pending.current[id]?.auto ?? true) };
           setSave(id, 'error', e.message);
           return;
         }
@@ -218,13 +230,15 @@ export default function App() {
     };
     inflight.current[id] = (inflight.current[id] || Promise.resolve()).then(run).finally(() => { if (!pending.current[id]) delete inflight.current[id]; });
     return inflight.current[id];
-  }, [mutate, setSave, handleAuthError]);
+  }, [mutate, setSave, handleAuthError, refresh]);
 
-  function update(id, key, value) {
+  // auto = การแก้ที่ระบบทำเอง (เติม SKU ที่จำไว้) ไม่ใช่สิ่งที่ผู้ใช้พิมพ์
+  function update(id, key, value, auto = false) {
     const order = ordersRef.current.find(o => o.id === id);
     if (!order || !isPending(order.status)) return;
     mutate(os => os.map(o => (o.id === id ? { ...o, [key]: value } : o)));
-    const p = pending.current[id] || { fields: {}, items: null };
+    const p = pending.current[id] || { fields: {}, items: null, auto: true };
+    p.auto = p.auto && auto;
     if (key === 'items') p.items = value; else p.fields[key] = value;
     pending.current[id] = p;
     setSave(id, 'dirty');
@@ -236,6 +250,14 @@ export default function App() {
     && (tab === 'todo' ? isPending(o.status) : tab === 'jst' ? o.status === 'confirmed' : o.status === 'done' || o.status === 'rejected')
     && `${o.code} ${o.billNumber} ${o.customerName} ${o.phone} ${o.sender} ${o.branch}`.toLowerCase().includes(query.trim().toLowerCase()));
   const current = visible.find(o => o.id === selectedId) || visible[0] || null;
+  // เปิดใบที่ยังรอตรวจ: รายการที่ยังไม่มี SKU และเคยกรอก SKU ให้ชุด สินค้า+ขนาด+สี นี้แล้ว → เติมให้ (บันทึกอัตโนมัติเหมือนการแก้ปกติ)
+  const currentId = current?.id;
+  useEffect(() => {
+    const o = ordersRef.current.find(x => x.id === currentId);
+    if (!o || !skuReady || !isPending(o.status)) return;
+    const r = fillSkus(o.items, skuMemory.current, it => skuCleared.current.has(`${o.id}|${skuKey(it)}`));
+    if (r.filled) update(o.id, 'items', r.items.map((it, i) => (it === o.items[i] ? it : { ...it, skuAuto: true })), true);
+  }, [currentId, skuReady]); // eslint-disable-line react-hooks/exhaustive-deps
   const errors = current ? validate(current) : {};
   const showErrors = current ? shown.has(current.id) : false;
   const locked = !!current && !isPending(current.status);
@@ -335,7 +357,24 @@ export default function App() {
       if (e.code === 'conflict' || e.code === 'locked' || e.status === 404) await refresh();
     } finally { setBusy(false); }
   }
-  const setItem = (i, key, value) => update(current.id, 'items', current.items.map((it, j) => (j === i ? { ...it, [key]: value } : it)));
+  const setItem = (i, key, value) => update(current.id, 'items', current.items.map((it, j) => {
+    if (j !== i) return it;
+    const next = { ...it, [key]: value };
+    const mem = skuMemory.current;
+    if (key === 'sku') {
+      // พิมพ์ SKU เอง = สอนระบบ (ใบอื่นที่เปิดต่อจากนี้ได้ใช้ทันที) · ลบออก = ไม่ต้องเติมกลับให้แถวนี้
+      next.skuAuto = false;
+      const k = skuKey(next);
+      if (k && value.trim()) { mem[k] = value.trim(); skuCleared.current.delete(`${current.id}|${k}`); } else if (k) skuCleared.current.add(`${current.id}|${k}`);
+    } else if (!it.sku || it.skuAuto) {
+      // แก้สินค้า/ขนาด/สี: SKU ที่ระบบเติมให้ (หรือยังว่าง) เปลี่ยนตามชุดใหม่ · SKU ที่คนพิมพ์เองไม่แตะ
+      next.sku = mem[skuKey(next)] || '';
+      next.skuAuto = !!next.sku;
+    }
+    return next;
+  }));
+  const autoSkus = current && !locked ? current.items.filter(it => it.skuAuto && it.sku).length : 0;
+  const noSku = current ? current.items.filter(it => !it.sku).length : 0;
   const err = k => (showErrors ? errors[k] : undefined);
   const unsure = k => !!current?.uncertain?.includes(k) && !locked;
   const warn = current ? warnings(current) : [];
@@ -477,8 +516,12 @@ export default function App() {
                       <input aria-label={`สินค้า ${i + 1}`} placeholder="สินค้า" value={it.product} readOnly={locked} onChange={e => setItem(i, 'product', e.target.value)} />
                       <input aria-label={`ขนาด ${i + 1}`} placeholder="ขนาด" value={it.size} readOnly={locked} onChange={e => setItem(i, 'size', e.target.value)} />
                       <input aria-label={`สี ${i + 1}`} placeholder="สี" value={it.color} readOnly={locked} onChange={e => setItem(i, 'color', e.target.value)} />
+                      <input aria-label={`SKU ${i + 1}`} placeholder="SKU" className={it.skuAuto && it.sku && !locked ? 'sku is-auto' : 'sku'} maxLength={100} autoCapitalize="characters" autoComplete="off" spellCheck={false}
+                        value={it.sku || ''} title={it.sku || undefined} readOnly={locked} onChange={e => setItem(i, 'sku', e.target.value)} />
                       <button type="button" className="icon-btn danger" aria-label={`ลบรายการ ${i + 1}`} disabled={locked} onClick={() => update(current.id, 'items', current.items.filter((_, j) => j !== i))}><Trash2 size={18} /></button>
                     </div>)}
+                    {autoSkus > 0 && <p className="hint sku-hint" role="status"><Check size={14} aria-hidden="true" />เติม SKU ที่เคยกรอกไว้ให้ {autoSkus} รายการ (ช่องสีเขียว) — ตรวจแล้วแก้ได้ถ้าไม่ตรง</p>}
+                    {!locked && current.items.length > 0 && autoSkus === 0 && <p className="hint sku-hint">กรอก SKU ครั้งเดียว ระบบจะจำตาม สินค้า + ขนาด + สี แล้วเติมให้ใบถัดไปเอง</p>}
                     <button type="button" className="btn outline add" disabled={locked} onClick={() => update(current.id, 'items', [...current.items, emptyItem()])}><Plus size={18} aria-hidden="true" />เพิ่มรายการสินค้า</button>
                   </fieldset>
 
@@ -543,7 +586,7 @@ export default function App() {
           <div><dt>ลูกค้า</dt><dd>{current.customerName}</dd></div>
           <div><dt>เบอร์โทร</dt><dd>{current.phone}</dd></div>
           <div><dt>ที่อยู่จัดส่ง</dt><dd>{[current.address, current.subDistrict, current.district, current.province, current.postcode].join(' ')}</dd></div>
-          <div><dt>สินค้า</dt><dd>{current.items.length} รายการ</dd></div>
+          <div><dt>สินค้า</dt><dd>{current.items.length} รายการ{noSku > 0 && current.items.length > 0 ? ` (ยังไม่มี SKU ${noSku} รายการ)` : ''}</dd></div>
           <div><dt>ยอดรวม</dt><dd className="confirm-total">฿{money(current.total)}</dd></div>
         </dl>
         {warn.length > 0 && <div className="banner warn"><TriangleAlert size={18} aria-hidden="true" />ยอดไม่ตรงกับใบเสร็จ ต่างกัน ฿{money(Math.abs(warn[0].diff))}</div>}
